@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# 调试产物 / debug artifacts
+*.png
+*.xml
+
 # C extensions
 *.so
 
