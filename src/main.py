@@ -26,10 +26,10 @@ def main():
 
     # ---- 接线按钮回调 ----
     ui.btn_power.config(command=power.toggle_power)
-    ui.btn_meet.config(command=live.run_pre_meet)
-    ui.btn_live_start.config(command=live.start_live)
-    ui.btn_live_stop.config(command=live.stop_live)
-    ui.btn_audio_mode.config(command=live.toggle_audio_mode)
+    # ui.btn_meet.config(command=live.run_pre_meet)
+    # ui.btn_live_start.config(command=live.start_live)
+    # ui.btn_live_stop.config(command=live.stop_live)
+    # ui.btn_audio_mode.config(command=live.toggle_audio_mode)
     ui.btn_cap.config(command=capture.start_capture)
     ui.btn_save.config(command=config.save_config)
     ui.btn_pwd.config(command=dialogs.dialog_modify_pwd)

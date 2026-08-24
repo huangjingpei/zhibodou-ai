@@ -1,32 +1,50 @@
-# ====================== 全局运行时状态 ======================
-# 集中管理原先散落在各函数里的 global 变量，避免「global 满天飞」。
-# 其他模块统一通过 `import state` 后读写 `state.xxx`，不再使用 global 关键字。
-import queue
-import threading
+import sys
 
-# ---- scrcpy 投屏嵌入 ----
-scrcpy_process = None
-scrcpy_hwnd = 0
+"""
+智播豆全局运行状态机与状态变量
+兼容原项目的模块级变量直接读取 (例如 state.system_power) 
+以及面向对象的 app_state 单例访问
+"""
 
-# ---- 系统开关 ----
-system_power = False
-live_running = False
-screenshot_working = False
+# ==============================================================================
+# 模块级全局状态变量 (兼容原项目 broadcast/power.py, gui/ui.py 等直接导入并读写)
+# ==============================================================================
 
-# ---- 话术发送节流 ----
-locker = threading.Lock()          # 保证发送不被并发打断
-can_next_speak = True
-count_down_sec = 0
-seq_index = 0                      # 直播顺序循环 0->区间1, 1->区间2, 2->区间3
+system_power = False          # 系统开机/总电源状态
+is_broadcasting = False       # 是否正在直播播控循环中
+is_paused = False             # 是否处于暂停状态
+current_script_index = 0      # 当前播放话术索引
+current_script_text = ""      # 当前话术内容
+device_serial = None          # 当前连接的 ADB 设备序列号
+device_connected = False      # 设备是否已连接
+scrcpy_running = False        # 投屏服务是否运行中
+auth_passed = True            # 授权认证是否通过
 
-# ---- 实时数据计数 ----
-online_num = 0
-like_cnt = 0
-gift_cnt = 0
-comment_cnt = 0
+# 统计计数器
+broadcast_count = 0           # 累计已播报条数
+start_time = None             # 开机/启动时间戳
 
-# ---- 音频模式 ----
-inner_audio_mode = False           # True=内录(剪贴板) / False=外音(TTS 语音)
 
-# ---- 抓屏日志消息队列 ----
-msg_queue = queue.Queue(maxsize=100)
+# ==============================================================================
+# 状态机封装类 (面向对象支持)
+# ==============================================================================
+
+class AppState:
+    def __init__(self):
+        self.system_power = False
+        self.is_running = False
+        self.is_paused = False
+        self.current_script_index = 0
+        self.device_serial = None
+        self.device_connected = False
+
+    def __getattr__(self, name):
+        if name in globals():
+            return globals()[name]
+        return False
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        globals()[name] = value
+
+app_state = AppState()
