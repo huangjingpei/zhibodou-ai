@@ -71,7 +71,7 @@ def wait_next_round_worker():
     cfg = config.load_config()
     interval_sec = int(cfg.get("script_interval", 15) or 15)
 
-    audio_monitor = AudioPlaybackMonitor(silence_hold_sec=0.8)
+    audio_monitor = AudioPlaybackMonitor(silence_hold_sec=0.8, log_fn=ui.log_screen)
     audio_monitor.wait_for_doubao_speech_cycle(max_wait_start_sec=4.0, max_speech_timeout_sec=45.0)
 
     count = interval_sec
