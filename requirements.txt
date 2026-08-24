@@ -1,0 +1,9 @@
+# 智播豆 AI 智能直播管控系统 — Python 依赖
+# 安装命令：  pip install -r requirements.txt
+# 注：tkinter 为 Python 标准库（Windows 官方安装包已自带），无需在此列出。
+
+pyautogui>=0.9.54          # 屏幕截图/坐标操作（直播抓屏、点击）
+pyttsx3>=2.90             # 离线 TTS 语音播报（外音模式）
+websocket-client>=1.7.0   # 弹幕 WebSocket 客户端（import 名为 websocket）
+pyperclip>=1.8.2          # 剪贴板操作（内录模式降级路径）
+pygetwindow>=0.0.9        # 定位 scrcpy 窗口句柄（Windows 原生窗口嵌入）

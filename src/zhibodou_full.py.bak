@@ -1,0 +1,1100 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, simpledialog
+import threading
+import time
+import json
+import os
+import subprocess
+import pyautogui
+import pyttsx3
+import re
+import websocket
+import pyperclip
+import winsound
+import queue
+import hashlib
+import uuid
+import platform
+import ctypes
+from ctypes import wintypes
+import base64
+
+# ====================== 路径配置（基于源码位置自动推导，兼容目录重组） ======================
+# 本文件位于 <项目根>/src/zhibodou_full.py，由此可稳定推导出各资源目录：
+#   THIS_DIR = <项目根>/src    —— 脚本所在目录，存放配置/授权等运行时文件
+#   BASE_DIR = <项目根>        —— 存放 scrcpy/、apk/ 等子目录
+# 这样无论从哪个目录启动（双击 .bat / 命令行 / 打包后），路径都不会再错位。
+THIS_DIR   = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.dirname(THIS_DIR)
+SCRCPY_DIR = os.path.join(BASE_DIR, "scrcpy")
+APK_DIR    = os.path.join(BASE_DIR, "apk")
+SCRCPY_EXE = os.path.join(SCRCPY_DIR, "scrcpy.exe")
+ADB_EXE    = os.path.join(SCRCPY_DIR, "adb.exe")
+ADBKEYBOARD_APK = os.path.join(APK_DIR, "ADBKeyBoard.apk")
+CLIPPER_APK    = os.path.join(APK_DIR, "clipper.apk")
+
+# ===================== 豆包APP控件锚点（uiautomator实测 2026-08-23） =====================
+# input_text: 输入框（仅文字模式存在）  action_send: 发送按钮（仅输入框有文字时出现）
+# action_input: 语音→文字切换按钮(desc=文本输入)。语音模式下 input_text 不存在，须先点它！
+# action_full_screen: 全屏输入按钮——多行文本把输入框撑高时出现在 action_send 正上方！
+#   实测 bounds=[925,1979][1047,2128]，与 action_send [925,2124][1047,2265] x 完全重叠、上下紧贴。
+#   绝不能点击 y<2128 的右侧区域，否则会误入全屏输入页！
+DOUBAO_INPUT_ID        = "com.larus.nova:id/input_text"
+DOUBAO_SEND_ID         = "com.larus.nova:id/action_send"
+DOUBAO_FULLSCREEN_ID   = "com.larus.nova:id/action_full_screen"
+DOUBAO_VOICE_TOGGLE_ID = "com.larus.nova:id/action_input"
+DOUBAO_PKG             = "com.larus.nova"
+
+# =====================【警告：已废弃硬编码兜底坐标】=====================================
+# 旧兜底 (980,2120) 在多行文本模式下正好落在 action_full_screen 按钮内，导致误点进
+# 全屏输入页！定位失败的正确做法是报错重试，而不是点一个可能过期的坐标。
+# ==========================================================================================
+
+# ===================== uiautomator 动态坐标定位（替换硬编码 P0 方案）====================
+import re as _re_uid
+import xml.etree.ElementTree as _ET
+_BOUNDS_CACHE = {"input": None, "send": None, "time": 0.0}
+_CACHE_TTL    = 15  # 秒；正常发话术间隔 10-30s，15s 命中率近 100%，又能在 APP 改版时及时失效
+
+def _ui_status(msg, color="#ff6b6b"):
+    """线程安全地更新主界面状态栏；GUI 未就绪时退化为 print"""
+    try:
+        root.after(0, lambda: lab_sys_status.config(text=msg, fg=color))
+    except Exception:
+        print("[状态]", msg)
+
+def _dump_ui_xml(retries=2):
+    """拉控件树 XML。注意：AI 流式回复时 dump 会卡住，超时后自动重试。"""
+    for _ in range(retries + 1):
+        try:
+            subprocess.run(
+                [ADB_EXE,"shell", "uiautomator", "dump", "/sdcard/_zbd_uidump.xml"],
+                capture_output=True, timeout=10
+            )
+            r = subprocess.run(
+                [ADB_EXE,"shell", "cat", "/sdcard/_zbd_uidump.xml"],
+                capture_output=True, timeout=10
+            )
+            xml = r.stdout.decode("utf-8", errors="ignore") if r.stdout else ""
+            if "<node" in xml:
+                return xml
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return None
+
+def _parse_bounds_str(s):
+    """[x1,y1][x2,y2] -> (x1,y1,x2,y2) or None"""
+    m = _re_uid.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", s or "")
+    return tuple(map(int, m.groups())) if m else None
+
+def _find_node(xml_str, target_id, clickable_only=False):
+    """ElementTree 精确解析：找 resource-id==target_id 的节点（可要求 clickable）。
+    返回 Element 节点本身（可同时取 bounds/text），找不到返回 None。"""
+    if not xml_str: return None
+    try:
+        import io as _io
+        root = _ET.parse(_io.StringIO(xml_str)).getroot()
+    except Exception:
+        return None
+    for n in root.iter('node'):
+        if n.get('resource-id') == target_id:
+            if clickable_only and n.get('clickable') != 'true':
+                continue
+            return n
+    return None
+
+def _find_id_bounds(xml_str, target_id):
+    """取 resource-id 节点的自身 bounds（ElementTree 精确解析，不会抓到邻节点）"""
+    n = _find_node(xml_str, target_id)
+    if n is None: return None
+    return _parse_bounds_str(n.get('bounds', ''))
+
+def _find_node_text(xml_str, target_id):
+    """取 resource-id 节点的 text 属性（用于验证粘贴结果）"""
+    n = _find_node(xml_str, target_id)
+    return n.get('text', '') if n is not None else None
+
+def _bounds_center(b):
+    if not b: return None
+    x1, y1, x2, y2 = b
+    return ((x1 + x2) // 2, (y1 + y2) // 2)
+
+def check_clipper_installed():
+    """检测手机是否装了 clipper（剪贴板广播接收器）。没装则中文话术必然发不出去！"""
+    try:
+        r = subprocess.run([ADB_EXE,"shell", "pm", "list", "packages"],
+                           capture_output=True, timeout=5)
+        return "clipper" in r.stdout.decode("utf-8", "ignore").lower()
+    except Exception:
+        return False
+
+def get_input_center(force=False):
+    """获取输入框中心点坐标 (x, y)；优先用缓存，过期或强制时重新 dump"""
+    now = time.time()
+    if not force and _BOUNDS_CACHE["input"] and (now - _BOUNDS_CACHE["time"]) < _CACHE_TTL:
+        return _bounds_center(_BOUNDS_CACHE["input"])
+    b = _find_id_bounds(_dump_ui_xml(), DOUBAO_INPUT_ID)
+    if b:
+        _BOUNDS_CACHE["input"] = b
+        _BOUNDS_CACHE["time"]  = now
+    return _bounds_center(b)
+
+def get_send_center(force=True):
+    """获取发送按钮中心点。发送按钮仅在输入框有文字时存在，必须 force 刷新。
+    多行文本会把输入框撑高，action_send 正上方会出现 action_full_screen(全屏输入)，
+    两按钮 x 完全重叠——必须排除误点全屏按钮的可能。"""
+    xml = _dump_ui_xml()  # 粘贴后控件树必变，不复用旧缓存
+    if not xml: return None
+    send_node = _find_node(xml, DOUBAO_SEND_ID, clickable_only=True)
+    if send_node is None:
+        return None
+    send_b = _parse_bounds_str(send_node.get('bounds', ''))
+    fs_b   = _find_id_bounds(xml, DOUBAO_FULLSCREEN_ID)
+    c = _bounds_center(send_b)
+    # 双保险：点击点绝不能落在全屏按钮矩形内（防 bounds 异常/布局未稳定）
+    if c and fs_b:
+        fx1, fy1, fx2, fy2 = fs_b
+        if fx1 <= c[0] <= fx2 and fy1 <= c[1] <= fy2:
+            return None  # 坐标可疑，宁可不点
+    if send_b:
+        _BOUNDS_CACHE["send"] = send_b
+    return c
+
+def _switch_to_text_mode():
+    """豆包停在语音模式时，点 action_input(文本输入) 切回文字模式。
+    AI 正在流式回复时按钮位置可能反复重排，最多点 3 次，直到 input_text 出现"""
+    for attempt in range(3):
+        xml = _dump_ui_xml()
+        if not xml:
+            time.sleep(1.2); continue
+        if _find_id_bounds(xml, DOUBAO_INPUT_ID):
+            return True  # 已经是文字模式
+        tb = _find_id_bounds(xml, DOUBAO_VOICE_TOGGLE_ID)
+        if not tb:
+            time.sleep(1.2); continue
+        cx, cy = (tb[0] + tb[2]) // 2, (tb[1] + tb[3]) // 2
+        try:
+            subprocess.run([ADB_EXE,"shell", "input", "tap", str(cx), str(cy)],
+                           capture_output=True, timeout=3)
+        except Exception:
+            time.sleep(1.2); continue
+        time.sleep(1.3)  # 等输入框展开动画
+    # 3 次都失败，最后再 dump 一次看是不是真的没切过来
+    return bool(_dump_ui_xml() and _find_id_bounds(_dump_ui_xml(), DOUBAO_INPUT_ID))
+
+def verify_input_has_text():
+    """粘贴后验证输入框是否真的有文字。
+    返回 True=有字 / False=空(粘贴失败) / None=无法判断(dump失败)"""
+    xml = _dump_ui_xml()
+    if not xml: return None
+    t = _find_node_text(xml, DOUBAO_INPUT_ID)
+    if t is None: return None
+    return bool(t) and "发消息" not in t  # 占位符"发消息或按住说话..."不算有字
+
+def tap_input_box():
+    """点击输入框：自动处理语音模式 + uiautomator 动态定位"""
+    pt = get_input_center()
+    if not pt:
+        # 输入框不存在——可能停在语音模式，尝试切换
+        _ui_status("🔄输入框未找到，尝试从语音模式切换…", "#f59e0b")
+        if _switch_to_text_mode():
+            pt = get_input_center(force=True)
+    if not pt:
+        _ui_status("⚠️找不到豆包输入框：请确认豆包在前台对话页", "#ff6b6b")
+        return False
+    adb_tap(*pt)
+    return True
+
+def tap_send_button(retries=3):
+    """控件对象定位点击发送按钮——绝不使用硬编码坐标。
+
+    流程（每一步都基于控件树，不猜坐标）：
+    1. dump 控件树 → ElementTree 解析 action_send 自身 bounds（要求 clickable）
+    2. 点击点取按钮【下四分位】中心：多行文本会同时上移 send 和 fullscreen
+       两个按钮，取下半部点击点远离紧贴上沿的全屏输入按钮
+    3. 双重区域校验：点击点必须在 send 矩形内、且绝不能落在 fullscreen 矩形内
+    4. 点击后【发送结果验证】：输入框清空 + action_send 消失；未生效则重试
+    """
+    for attempt in range(1, retries + 1):
+        xml = _dump_ui_xml()
+        if not xml:
+            time.sleep(1.2); continue
+        send_node = _find_node(xml, DOUBAO_SEND_ID, clickable_only=True)
+        sb = _parse_bounds_str(send_node.get('bounds', '')) if send_node is not None else None
+        if not sb:
+            _ui_status(f"⚠️第{attempt}次未定位到发送按钮(输入框可能没文字)", "#f59e0b")
+            time.sleep(1.2); continue
+        cx = (sb[0] + sb[2]) // 2
+        cy = sb[1] + (sb[3] - sb[1]) * 3 // 4   # 下四分位点，实测安全
+        if not (sb[0] <= cx <= sb[2] and sb[1] <= cy <= sb[3]):
+            _ui_status("⚠️发送按钮点击点越界，重试", "#f59e0b"); continue
+        fsb = _find_id_bounds(xml, DOUBAO_FULLSCREEN_ID)
+        if fsb and fsb[0] <= cx <= fsb[2] and fsb[1] <= cy <= fsb[3]:
+            _ui_status("⚠️点击点与全屏输入按钮重叠，放弃本次点击", "#ff6b6b"); continue
+        adb_tap(cx, cy)
+        time.sleep(1.5)
+        # 发送后验证：输入框清空 且 发送按钮消失
+        xml2 = _dump_ui_xml()
+        t = _find_node_text(xml2, DOUBAO_INPUT_ID)
+        send_gone = xml2 and _find_node(xml2, DOUBAO_SEND_ID) is None
+        if (t is None or t == "" or "发消息" in t) and send_gone:
+            return True
+        _ui_status(f"🔄第{attempt}次点击发送未生效(输入框仍有文字)，重试…", "#f59e0b")
+        time.sleep(1.0)
+    _ui_status("❌发送失败：多次点击发送按钮无效，请检查豆包页面", "#ff6b6b")
+    return False
+
+# ===================== ADBKeyboard 直输方案（Android 10+ 的正解，彻底绕开剪贴板） =====================
+# 背景：Android 10+ 禁止后台 app 写剪贴板，clipper.set 实测 result=-1 静默失败
+# （MIUI/Android12 实测）。ADBKeyboard 是一个空输入法，接收广播后把文字直接
+# "打"进当前聚焦的输入框——中文/换行/emoji 全支持，连粘贴这步都省了。
+ADB_IME_ID = "com.android.adbkeyboard/.AdbIME"
+
+def check_adbkeyboard_installed():
+    """检测手机是否装了 ADBKeyboard 输入法"""
+    try:
+        r = subprocess.run([ADB_EXE,"shell", "pm", "list", "packages"],
+                           capture_output=True, timeout=5)
+        return "adbkeyboard" in r.stdout.decode("utf-8", "ignore").lower()
+    except Exception:
+        return False
+
+def get_adbkeyboard_ime_id():
+    """动态解析手机上 ADBKeyboard 的真实 IME ID（不同 ROM/版本 ID 可能不同）。
+    优先从 `ime list` 解析，找不到则用标准 ID 兜底；后续发送时会先用 `ime enable` 启用。"""
+    def _parse(out):
+        for line in (out or "").splitlines():
+            low = line.lower()
+            if "adbkeyboard" in low:
+                line = line.strip()
+                if line.startswith("mId="):
+                    return line[4:].split()[0]
+                if ":" in line:
+                    return line.split(":")[0].strip()
+                return line
+        return None
+    try:
+        r = subprocess.run([ADB_EXE, "shell", "ime", "list", "-s"],
+                           capture_output=True, timeout=5)
+        idv = _parse(r.stdout.decode("utf-8", "ignore"))
+        if idv:
+            return idv
+        r = subprocess.run([ADB_EXE, "shell", "ime", "list"],
+                           capture_output=True, timeout=5)
+        idv = _parse(r.stdout.decode("utf-8", "ignore"))
+        if idv:
+            return idv
+    except Exception:
+        pass
+    return "com.android.adbkeyboard/.AdbIME"  # 标准兜底
+
+def _ime_current():
+    """获取当前默认输入法 id"""
+    try:
+        r = subprocess.run([ADB_EXE,"shell", "settings", "get", "secure", "default_input_method"],
+                           capture_output=True, timeout=5)
+        return r.stdout.decode("utf-8", "ignore").strip()
+    except Exception:
+        return ""
+
+def adb_input_text_via_ime(text):
+    """通过 ADBKeyboard 广播把文字直接输入聚焦的输入框（base64 传输，无编码问题）"""
+    try:
+        b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        r = subprocess.run(
+            [ADB_EXE,"shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", b64],
+            capture_output=True, timeout=8)
+        out = r.stdout.decode("utf-8", "ignore")
+        return ("result=0" in out), ("" if "result=0" in out else out.strip()[-80:])
+    except Exception as e:
+        return False, str(e)
+
+def _clear_input_box():
+    """控件定位聚焦输入框并清空旧草稿（Ctrl+A 全选删除 + 退格兜底）。
+    ⚠️ 旧草稿不清掉，后面的"输入验证"会出现假阳性（把草稿当成新输入的内容）！"""
+    xml = _dump_ui_xml()
+    if not xml:
+        return False
+    # 语音模式下先切回文字模式
+    if _find_id_bounds(xml, DOUBAO_INPUT_ID) is None:
+        if not _switch_to_text_mode():
+            return False
+        xml = _dump_ui_xml()
+    b = _find_id_bounds(xml, DOUBAO_INPUT_ID)
+    if not b:
+        return False
+    adb_tap((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)   # 聚焦输入框
+    time.sleep(0.5)
+    try:
+        subprocess.run([ADB_EXE,"shell", "input", "keycombination", "113", "29"],   # Ctrl+A 全选
+                       capture_output=True, timeout=3)
+        time.sleep(0.2)
+        subprocess.run([ADB_EXE,"shell", "input", "keyevent", "67"],                # 删除选中
+                       capture_output=True, timeout=3)
+        time.sleep(0.35)
+    except Exception:
+        pass
+    t = _find_node_text(_dump_ui_xml(), DOUBAO_INPUT_ID)
+    if t and t != "" and "发消息" not in t:
+        # 全选失败 → 退格连发兜底
+        for _ in range(60):
+            subprocess.run([ADB_EXE,"shell", "input", "keyevent", "67"],
+                           capture_output=True, timeout=3)
+        time.sleep(0.3)
+        t = _find_node_text(_dump_ui_xml(), DOUBAO_INPUT_ID)
+    return t is None or t == "" or "发消息" in t
+
+def send_text_to_doubao(text):
+    """统一发送入口（开播预演/直播话术共用）：
+    清空输入框 → ADBKeyboard 直输(绕开剪贴板) → 控件定位点击发送(带验证)。
+    返回 (ok, err_msg)。ADBKeyboard 未安装时降级为 clipper 剪贴板方案。"""
+    text = text.strip()
+    if not text:
+        return False, "发送内容为空"
+
+    # 1) 确保文字模式 + 聚焦并清空输入框（清掉旧草稿，杜绝假阳性）
+    if not _clear_input_box():
+        return False, "无法定位/清空豆包输入框(豆包不在前台对话页?)"
+
+    # 2) 输入文字
+    if check_adbkeyboard_installed():
+        adb_ime = get_adbkeyboard_ime_id()
+        prev_ime = _ime_current()
+        # 关键：未启用的输入法 `ime set` 会报 Unknown，先 enable 再 set
+        try:
+            subprocess.run([ADB_EXE, "shell", "ime", "enable", adb_ime],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
+        time.sleep(0.3)
+        subprocess.run([ADB_EXE, "shell", "ime", "set", adb_ime],
+                       capture_output=True, timeout=5)
+        time.sleep(0.6)
+        # 切换输入法可能使豆包输入框失焦，重新聚焦后再发广播
+        tap_input_box()
+        time.sleep(0.4)
+        ok, err = adb_input_text_via_ime(text)
+        # 输完恢复原输入法，避免影响手机正常打字
+        if prev_ime and prev_ime != adb_ime:
+            try:
+                subprocess.run([ADB_EXE,"shell", "ime", "set", prev_ime],
+                               capture_output=True, timeout=5)
+            except Exception:
+                pass
+        if not ok:
+            return False, "ADBKeyboard 输入失败: " + err
+        time.sleep(0.9)
+        # 输入验证：连续 dump 2 次，避免 AI 流式回复导致 dump 偶发返回空状态
+        # 严苛的"开头片段匹配"在 AI 动画期间容易假阴性，故改为"非空且非占位符"
+        # 最终的"是否真的发送出去"由 tap_send_button 内的发送后验证把关
+        input_ok = False
+        for _ in range(2):
+            t = _find_node_text(_dump_ui_xml(), DOUBAO_INPUT_ID)
+            if t is not None and t != "" and "发消息" not in t:
+                input_ok = True
+                break
+            time.sleep(1.2)
+        if not input_ok:
+            return False, "文字未出现在输入框(ADBKeyboard输入未生效)"
+    else:
+        # 降级路径：clipper 剪贴板 + keyevent 279 粘贴
+        # ⚠️ Android 10+ 上 clipper 后台写剪贴板会被系统拒绝，仅老系统可用
+        adb_set_phone_clipboard(text)
+        time.sleep(0.4)
+        adb_phone_paste()
+        time.sleep(1.0)
+        t = _find_node_text(_dump_ui_xml(), DOUBAO_INPUT_ID)
+        if t is None or t == "" or "发消息" in t:
+            return False, "粘贴失败：剪贴板没写进去(Android10+限制)。请安装 ADBKeyboard.apk"
+
+    # 3) 控件定位点击发送（内含发送后验证 + 自动重试）
+    if not tap_send_button():
+        return False, "发送按钮点击未生效(多次重试后放弃)"
+    return True, ""
+    return False
+
+# ===================== adb工具函数，直接操控手机，不碰电脑鼠标剪贴板 =====================
+def adb_tap(x, y):
+    """adb模拟手机屏幕点击（手机本机坐标）"""
+    try:
+        subprocess.run([ADB_EXE,"shell", "input", "tap", str(x), str(y)],
+                       capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+def adb_set_phone_clipboard(text):
+    """把文字写入【手机剪贴板】，完全隔离电脑剪贴板，解决发出代码bug
+    ⚠️ clipper v1.2.1 只认 -e text extra（实测 textb64 是无效参数，广播会被
+    "No text is provided" 拒绝，剪贴板根本没写入！），必须用 text + shell 引号转义"""
+    try:
+        import shlex as _shlex
+        cmd = "am broadcast -a clipper.set -e text " + _shlex.quote(text)
+        r = subprocess.run([ADB_EXE,"shell", cmd], capture_output=True, timeout=5)
+        out = r.stdout.decode("utf-8", "ignore")
+        if "Text is copied" not in out:
+            _ui_status("⚠️clipper写入剪贴板失败：" + out.strip()[-60:], "#ff6b6b")
+        time.sleep(0.25)
+    except Exception:
+        pass
+
+def adb_phone_paste():
+    """手机端执行粘贴 keyevent 279 = PASTE"""
+    try:
+        subprocess.run([ADB_EXE,"shell", "input", "keyevent", "279"], capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+# ===================== Windows原生API 解决投屏可拖动问题 =====================
+user32 = ctypes.windll.user32
+user32.SetProcessDPIAware()
+HWND = wintypes.HWND
+
+GWL_STYLE = -16
+GWL_EXSTYLE = -20
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_SYSMENU = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
+
+user32.SetParent.argtypes = [HWND, HWND]
+user32.MoveWindow.argtypes = [HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.BOOL]
+
+def get_tk_widget_hwnd(widget):
+    return int(widget.winfo_id())
+
+def real_embed_window(child_hwnd, parent_hwnd, x, y, w, h):
+    user32.SetParent(child_hwnd, parent_hwnd)
+    style = user32.GetWindowLongW(child_hwnd, GWL_STYLE)
+    style = style & (~WS_CAPTION) & (~WS_THICKFRAME) & (~WS_SYSMENU)
+    user32.SetWindowLongW(child_hwnd, GWL_STYLE, style)
+    ex_style = user32.GetWindowLongW(child_hwnd, GWL_EXSTYLE)
+    ex_style = ex_style | WS_EX_TRANSPARENT
+    user32.SetWindowLongW(child_hwnd, GWL_EXSTYLE, ex_style)
+    user32.MoveWindow(child_hwnd, x, y, w, h, True)
+
+def find_scrcpy_main_hwnd():
+    import pygetwindow as gw
+    for win in gw.getAllWindows():
+        if win.title.strip() == "scrcpy":
+            return win._hWnd
+    return 0
+
+def get_hwnd_rect(hwnd):
+    rect = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    left = rect.left
+    top = rect.top
+    width = rect.right - rect.left
+    height = rect.bottom - rect.top
+    return left, top, width, height
+
+# ====================== 授权系统配置 ======================
+SECRET_SALT = "ZhangAiChenZhiBoDou2026"
+DEFAULT_ADMIN_PWD = "aichen888"
+
+AUTH_FILE = os.path.join(THIS_DIR, "auth_key.dat")
+PWD_FILE = os.path.join(THIS_DIR, "admin_pwd.dat")
+EXPIRE_FILE = os.path.join(THIS_DIR, "expire.dat")
+
+def get_machine_code():
+    cpu = platform.processor()
+    mac = hex(uuid.getnode())
+    raw = f"{cpu}{mac}{SECRET_SALT}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+def check_machine_auth():
+    return True
+
+def save_machine_bind():
+    mc = get_machine_code()
+    key = hashlib.sha256((mc + SECRET_SALT).encode("utf-8")).hexdigest()
+    with open(AUTH_FILE, "w", encoding="utf-8") as f:
+        f.write(key)
+    return True
+
+def get_auth_remain_sec():
+    remain = 99999999
+    is_over = False
+    return remain, is_over
+
+def check_cannot_power_on():
+    return False
+
+def init_admin_password():
+    if not os.path.exists(PWD_FILE):
+        md5_val = hashlib.md5(DEFAULT_ADMIN_PWD.encode("utf-8")).hexdigest()
+        with open(PWD_FILE, "w") as f:
+            f.write(md5_val)
+
+def verify_admin_pwd(input_pwd):
+    if not os.path.exists(PWD_FILE):
+        return False
+    with open(PWD_FILE, "r") as f:
+        saved = f.read().strip()
+    return hashlib.md5(input_pwd.encode("utf-8")).hexdigest() == saved
+
+def change_admin_password(old_pwd, new_pwd):
+    if not verify_admin_pwd(old_pwd):
+        return False
+    new_md5 = hashlib.md5(new_pwd.encode("utf-8")).hexdigest()
+    with open(PWD_FILE, "w") as f:
+        f.write(new_md5)
+    return True
+
+# ====================== 全局业务配置 ======================
+pyautogui.FAILSAFE = False
+pyautogui.PAUSE = 0.05
+
+WS_SERVER_URL = "ws://127.0.0.1:8899"
+CONFIG_JSON = os.path.join(THIS_DIR, "zhibodou_config.json")
+# SCRCPY_EXE / ADB_EXE 已在文件顶部路径配置块中基于 BASE_DIR 定义，此处不再覆盖。
+
+scrcpy_process = None
+scrcpy_hwnd = 0
+system_power = False
+live_running = False
+screenshot_working = False
+locker = threading.Lock()
+can_next_speak = True
+count_down_sec = 0
+seq_index = 0   #直播顺序循环 0区间1，1区间2，2区间3
+
+DEFAULT_CFG = {
+    "product_name": "日用百货",
+    "product_desc": "你就是今天的主播 用中国话直接说话术 不要讲解 日用百货 品类多一一展示 下方小黄车直接拍",
+    "pre_meet_text": "你就是今天的主播 用中国话直接说话术 不要讲解 日用百货 品类多一一展示 下方小黄车随便拍",
+    "r1_min": "0", "r1_max": "30", "cmd1": "留人话术内容填这里",
+    "r2_min": "30", "r2_max": "100", "cmd2": "产品讲解话术内容填这里",
+    "r3_min": "100", "r3_max": "9999", "cmd3": "逼单促单话术内容填这里",
+    "script_interval": 25
+}
+
+online_num = 0
+like_cnt = 0
+gift_cnt = 0
+comment_cnt = 0
+inner_audio_mode = False
+msg_queue = queue.Queue(maxsize=100)
+
+# ====================== scrcpy自动启动嵌入+强锁死窗口 ======================
+def start_scrcpy_embed():
+    global scrcpy_process, scrcpy_hwnd
+    if scrcpy_process is not None:
+        return
+    if not os.path.exists(SCRCPY_EXE):
+        messagebox.showerror("文件缺失", f"找不到scrcpy.exe\n{SCRCPY_EXE}")
+        return
+
+    scrcpy_process = subprocess.Popen([
+        SCRCPY_EXE,
+        "--window-title", "scrcpy",
+        "--max-size", "620"
+    ], cwd=SCRCPY_DIR)
+
+    def embed_work():
+        global scrcpy_hwnd
+        parent_hwnd = get_tk_widget_hwnd(embed_container)
+        max_wait_sec = 8
+        spent = 0
+        scrcpy_hwnd = 0
+        while spent < max_wait_sec:
+            scrcpy_hwnd = find_scrcpy_main_hwnd()
+            if scrcpy_hwnd != 0:
+                break
+            time.sleep(0.35)
+            spent += 0.35
+        if scrcpy_hwnd and parent_hwnd:
+            real_embed_window(scrcpy_hwnd, parent_hwnd, 0, 0, 290, 530)
+
+    threading.Thread(target=embed_work, daemon=True).start()
+
+def lock_scrcpy_loop():
+    global scrcpy_hwnd
+    parent_hwnd = get_tk_widget_hwnd(embed_container)
+    while system_power and scrcpy_hwnd != 0:
+        try:
+            style = user32.GetWindowLongW(scrcpy_hwnd, GWL_STYLE)
+            style = style & (~WS_CAPTION) & (~WS_THICKFRAME) & (~WS_SYSMENU)
+            user32.SetWindowLongW(scrcpy_hwnd, GWL_STYLE, style)
+            ex_style = user32.GetWindowLongW(scrcpy_hwnd, GWL_EXSTYLE)
+            ex_style = ex_style | WS_EX_TRANSPARENT
+            user32.SetWindowLongW(scrcpy_hwnd, GWL_EXSTYLE, ex_style)
+            user32.MoveWindow(scrcpy_hwnd, 0, 0, 290, 530, True)
+        except Exception:
+            pass
+        time.sleep(0.15)
+
+def stop_scrcpy_embed():
+    global scrcpy_process, scrcpy_hwnd
+    if scrcpy_process:
+        try:
+            scrcpy_process.terminate()
+        except Exception:
+            pass
+        scrcpy_process = None
+    scrcpy_hwnd = 0
+
+# ====================== 弹幕解析 ======================
+def parse_danmu(msg):
+    global online_num, like_cnt, gift_cnt, comment_cnt
+    try:
+        m_online = re.search(r"直播间人数[:：]\s*(\d+)", msg)
+        if m_online:
+            online_num = int(m_online.group(1))
+            root.after(0, lambda: lab_online.config(text=f"📶 在线：{online_num} 人"))
+
+        m_like = re.search(r"总点赞(\d+)", msg)
+        if m_like:
+            like_cnt = int(m_like.group(1))
+            root.after(0, lambda: lab_like.config(text=f"👍 点赞：{like_cnt}"))
+
+        if "$来了" in msg:
+            gift_cnt += 1
+            root.after(0, lambda: lab_gift.config(text=f"🎁礼物：{gift_cnt}"))
+
+        m_comment = re.search(r"\[弹幕消息\]\s*\[(.*?)\]\s*(.+?)[:：](.+)", msg)
+        if m_comment:
+            uname = m_comment.group(2).strip()
+            cnt = m_comment.group(3).strip()
+            comment_cnt += 1
+            tim = time.strftime("%H:%M:%S")
+            root.after(0, lambda t=tim, u=uname, c=cnt: txt_danmu.insert(tk.END, f"[{t}] {u}：{c}\n") or txt_danmu.see(tk.END))
+    except Exception:
+        pass
+
+def ws_danmu_loop():
+    while live_running and system_power:
+        try:
+            ws = websocket.WebSocketApp(WS_SERVER_URL, on_message=lambda w,m: parse_danmu(m))
+            ws.run_forever()
+        except Exception:
+            time.sleep(2)
+
+# ====================== 截图抓屏模块 ======================
+def screen_capture_loop():
+    global screenshot_working
+    while screenshot_working and system_power:
+        try:
+            img = pyautogui.screenshot()
+            t = time.strftime("%H:%M:%S")
+            msg_queue.put(f"[{t}] 抓取画面完成\n")
+            time.sleep(1.0)
+        except Exception:
+            time.sleep(1)
+
+def ui_refresh_msg():
+    while not msg_queue.empty():
+        s = msg_queue.get()
+        txt_screen_log.insert(tk.END, s)
+        txt_screen_log.see(tk.END)
+    if screenshot_working:
+        root.after(200, ui_refresh_msg)
+
+def start_capture():
+    global screenshot_working
+    if not system_power:
+        messagebox.showwarning("提示", "请先打开总电源！")
+        return
+    if screenshot_working:
+        return
+    screenshot_working = True
+    threading.Thread(target=screen_capture_loop, daemon=True).start()
+    root.after(100, ui_refresh_msg)
+    lab_cap_status.config(text="抓屏：运行中 🟢", fg="#34d399")
+
+def stop_capture():
+    global screenshot_working
+    screenshot_working = False
+    lab_cap_status.config(text="抓屏：已停止 ⏸️", fg="#fbbf24")
+    txt_screen_log.delete(1.0, tk.END)
+
+# ====================== 总电源开关 ======================
+def power_on_self_check():
+    """开机自检：adb设备 / 豆包前台 / clipper安装。返回问题列表（空=全部通过）"""
+    problems = []
+    # 1. adb 设备在线
+    try:
+        r = subprocess.run([ADB_EXE,"devices"], capture_output=True, timeout=5)
+        out = r.stdout.decode("utf-8", errors="ignore")
+        online = [l for l in out.splitlines() if l.endswith("\tdevice")]
+        if not online:
+            problems.append("❌ 没有检测到 adb 设备，请用USB连接手机并授权调试")
+    except Exception:
+        problems.append("❌ adb 命令执行失败，请确认 adb 已加入 PATH")
+    # 2. 豆包在前台
+    try:
+        r = subprocess.run([ADB_EXE,"shell", "dumpsys", "window"], capture_output=True, timeout=5)
+        if DOUBAO_PKG not in r.stdout.decode("utf-8", errors="ignore"):
+            problems.append("⚠️ 豆包 APP 不在前台，请打开豆包进入对话页")
+    except Exception:
+        pass
+    # 3. ADBKeyboard 已安装（文字直输主通道；Android 10+ 剪贴板方案已不可用）
+    if not check_adbkeyboard_installed():
+        problems.append("⚠️ 手机未安装 ADBKeyboard：话术将无法输入豆包！\n"
+                        "   （Android 10+ 禁止后台写剪贴板，clipper 方案已失效。\n"
+                        f"    请用 adb install {ADBKEYBOARD_APK} 安装，程序目录已附带）")
+    elif ADB_IME_ID not in _ime_current():
+        problems.append("ℹ️ ADBKeyboard 已安装但不是当前输入法（程序会在发送时自动临时切换）")
+    return problems
+
+def toggle_power():
+    global system_power, live_running, screenshot_working
+    if check_cannot_power_on():
+        messagebox.showerror("禁止开机", "授权异常，无法启动系统")
+        return
+    if not system_power:
+        system_power = True
+        # 开机自检：设备/豆包前台/clipper，问题当场暴露
+        problems = power_on_self_check()
+        if problems:
+            messagebox.showwarning("开机自检发现问题", "\n\n".join(problems))
+        btn_power.config(bg="#00aa44")
+        winsound.Beep(1000, 120)
+        lab_sys_status.config(text="状态：待机【测试】✅", fg="#34d399")
+        btn_meet.config(state=tk.NORMAL)
+        btn_live_start.config(state=tk.NORMAL)
+        btn_audio_mode.config(state=tk.NORMAL)
+        btn_cap.config(state=tk.NORMAL)
+        start_scrcpy_embed()
+        threading.Thread(target=lock_scrcpy_loop, daemon=True).start()
+    else:
+        system_power = False
+        live_running = False
+        screenshot_working = False
+        stop_scrcpy_embed()
+        stop_capture()
+        btn_power.config(bg="#bb2222")
+        winsound.Beep(600,120)
+        lab_sys_status.config(text="状态：已关机 ❌", fg="#ef4444")
+        btn_meet.config(state=tk.DISABLED)
+        btn_live_start.config(state=tk.DISABLED)
+        btn_live_stop.config(state=tk.DISABLED)
+        btn_audio_mode.config(state=tk.DISABLED)
+        btn_cap.config(state=tk.DISABLED)
+        txt_danmu.delete(1.0, tk.END)
+        txt_screen_log.delete(1.0, tk.END)
+
+# ====================== TTS语音播报 ======================
+def speak_text(text):
+    if inner_audio_mode:
+        return
+    try:
+        eng = pyttsx3.init()
+        eng.setProperty("rate", 138)
+        eng.setProperty("volume", 0.95)
+        eng.say(text)
+        eng.runAndWait()
+        eng.stop()
+    except Exception:
+        pass
+
+# ====================== 开播预演【读取界面文本框，写入手机剪贴板，隔离电脑剪贴板】 ======================
+def run_pre_meet():
+    """执行开播预演：内容完全取自界面开播预演文本框，不会发送电脑复制的代码"""
+    if not system_power:
+        messagebox.showwarning("提示", "请先打开总电源！")
+        return
+    content = txt_pre_meet.get(1.0, tk.END).strip()
+    if not content:
+        messagebox.showwarning("提示", "开播预演文本框不能为空！")
+        return
+    if scrcpy_hwnd == 0:
+        messagebox.showerror("错误", "scrcpy投屏窗口句柄无效，请确认投屏已经嵌入成功！")
+        return
+
+    ok, err = send_text_to_doubao(content)
+    if not ok:
+        lab_sys_status.config(text="状态：❌预演下发失败", fg="#ff6b6b")
+        messagebox.showerror("下发失败",
+                             f"话术未能发送到豆包对话：\n\n{err}\n\n"
+                             f"提示：手机需安装 {ADBKEYBOARD_APK}（已在程序目录），\n"
+                             "且豆包需停留在前台对话页。")
+        return
+
+    lab_sys_status.config(text="状态：✅预演话术已发送（经发送验证）", fg="#34d399")
+    messagebox.showinfo("完成", "✅预演完成：话术已确认发送到豆包对话界面！")
+
+# ====================== 直播发送话术，读取区间1/2/3的内容，写入手机剪贴板 ======================
+def send_script_content(text):
+    global can_next_speak
+    with locker:
+        if not can_next_speak:
+            return
+        can_next_speak = False
+        if scrcpy_hwnd == 0:
+            return
+
+        ok, err = send_text_to_doubao(text)
+        if not ok:
+            _ui_status("❌话术发送失败: " + err[:36], "#ff6b6b")
+            can_next_speak = True
+            return
+
+        threading.Thread(target=count_down_work, daemon=True).start()
+
+def toggle_audio_mode():
+    global inner_audio_mode
+    inner_audio_mode = not inner_audio_mode
+    if inner_audio_mode:
+        btn_audio_mode.config(text="🔇内录模式(剪贴板)", bg="#333333", fg="white")
+    else:
+        btn_audio_mode.config(text="🔊外音模式(TTS语音)", bg="#06d6a0", fg="black")
+
+def count_down_work():
+    global can_next_speak, count_down_sec
+    cfg = load_config()
+    count_down_sec = int(cfg["script_interval"])
+    while count_down_sec > 0 and live_running and system_power:
+        root.after(0, lambda t=count_down_sec: lab_count.config(text=f"⏱间隔：{t} 秒"))
+        time.sleep(1)
+        count_down_sec -= 1
+    can_next_speak = True
+    root.after(0, lambda: lab_count.config(text="✅可以执行下一轮"))
+
+# ====================== 自动直播循环：读取界面区间1→2→3顺序循环 ======================
+def auto_live_loop():
+    global live_running, seq_index, can_next_speak
+    seq_index = 0
+    while live_running and system_power:
+        try:
+            if can_next_speak:
+                cfg = load_config()
+                if seq_index == 0:
+                    text = cfg["cmd1"]
+                elif seq_index == 1:
+                    text = cfg["cmd2"]
+                else:
+                    text = cfg["cmd3"]
+
+                if text.strip():
+                    send_script_content(text)
+
+                seq_index = (seq_index + 1) % 3
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+def start_live():
+    global live_running, seq_index
+    if not system_power:
+        messagebox.showwarning("提示", "请先打开总电源")
+        return
+    live_running = True
+    seq_index = 0
+    btn_live_start.config(state=tk.DISABLED)
+    btn_live_stop.config(state=tk.NORMAL)
+    lab_sys_status.config(text="状态：直播运行｜顺序循环区间1‑2‑3", fg="#34d399")
+    threading.Thread(target=ws_danmu_loop, daemon=True).start()
+    threading.Thread(target=auto_live_loop, daemon=True).start()
+    start_capture()
+
+def stop_live():
+    global live_running
+    live_running = False
+    stop_capture()
+    btn_live_start.config(state=tk.NORMAL)
+    btn_live_stop.config(state=tk.DISABLED)
+    lab_sys_status.config(text="状态：待机【测试】✅", fg="#34d399")
+    lab_count.config(text="✅可以执行下一轮")
+
+# ====================== 配置读写 ======================
+def load_config():
+    if os.path.exists(CONFIG_JSON):
+        try:
+            with open(CONFIG_JSON, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            return {**DEFAULT_CFG, **d}
+        except Exception:
+            pass
+    return DEFAULT_CFG.copy()
+
+def save_config():
+    try:
+        d = {
+            "product_name": ent_prod_name.get().strip(),
+            "product_desc": ent_prod_desc.get().strip(),
+            "pre_meet_text": txt_pre_meet.get(1.0, tk.END).strip(),
+            "r1_min": ent_r1min.get(), "r1_max": ent_r1max.get(), "cmd1": ent_cmd1.get(),
+            "r2_min": ent_r2min.get(), "r2_max": ent_r2max.get(), "cmd2": ent_cmd2.get(),
+            "r3_min": ent_r3min.get(), "r3_max": ent_r3max.get(), "cmd3": ent_cmd3.get(),
+            "script_interval": ent_interval.get()
+        }
+        with open(CONFIG_JSON, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        messagebox.showinfo("成功", "✅配置保存完成")
+    except Exception as e:
+        messagebox.showerror("错误", f"保存失败：{e}")
+
+# ====================== 密码弹窗 ======================
+def dialog_modify_pwd():
+    old = simpledialog.askstring("验证旧密码", "请输入管理员旧密码", show="*")
+    if old is None:
+        return
+    if not verify_admin_pwd(old):
+        messagebox.showerror("错误", "旧密码不正确")
+        return
+    new1 = simpledialog.askstring("设置新密码", "请输入新密码", show="*")
+    if new1 is None:
+        return
+    new2 = simpledialog.askstring("确认新密码", "再次输入新密码", show="*")
+    if new1 != new2:
+        messagebox.showerror("错误", "两次密码不一致")
+        return
+    if change_admin_password(old, new1):
+        messagebox.showinfo("成功", "密码修改成功")
+    else:
+        messagebox.showerror("错误", "修改失败")
+
+def dialog_auth_mgr():
+    messagebox.showinfo("提示", "当前测试版本，授权管理器仅保留入口，无需激活")
+
+# ====================== UI界面【尺寸完全不动】 ======================
+root = tk.Tk()
+root.title("智播豆 · AI智能直播管控系统")
+root.geometry("1240x800")
+root.resizable(False, False)
+root.configure(bg="#111827")
+
+head_frame = tk.Frame(root, bg="#1f2937")
+head_frame.pack(fill=tk.X)
+tk.Label(head_frame, text="智播豆 · AI智能直播管控系统", font=("微软雅黑", 22, "bold"), bg="#1f2937", fg="#00e5ff").pack(pady=10)
+
+auth_frame = tk.LabelFrame(root, text=" 🔐系统授权 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+auth_frame.pack(fill=tk.X, padx=15, pady=4)
+auth_frame.grid_columnconfigure(8, weight=1)
+
+tk.Label(auth_frame, text="✅授权正常【测试版】", bg="#111827", fg="#34d399", font=("微软雅黑",11,"bold")).grid(row=0, column=0, padx=12, pady=6)
+tk.Label(auth_frame, text="授权状态：永久测试", bg="#111827", fg="white").grid(row=0, column=1, padx=8, pady=6)
+tk.Button(auth_frame, text="密码设置", bg="#374151", fg="white", width=9, command=dialog_modify_pwd).grid(row=0, column=2, padx=4, pady=6)
+tk.Button(auth_frame, text="授权管理", bg="#374151", fg="white", width=9, command=dialog_auth_mgr).grid(row=0, column=3, padx=4, pady=6)
+
+btn_power = tk.Button(auth_frame, text="⏻", bg="#bb2222", fg="white", font=("Webdings",14), width=2, relief=tk.RAISED, command=toggle_power)
+btn_power.grid(row=0, column=8, sticky="e", padx=12, pady=6)
+
+main_all = tk.Frame(root, bg="#111827")
+main_all.pack(fill=tk.BOTH, expand=True, padx=15, pady=4)
+
+ui_left = tk.Frame(main_all, bg="#111827", width=310)
+ui_left.pack(side=tk.LEFT, fill=tk.Y)
+
+embed_gb = tk.LabelFrame(ui_left, text=" 📱手机投屏内嵌容器 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+embed_gb.pack(fill=tk.Y)
+
+embed_container = tk.Frame(embed_gb, bg="#000000", width=290, height=530)
+embed_container.pack(padx=5, pady=5)
+
+ui_right = tk.Frame(main_all, bg="#111827")
+ui_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10)
+
+cfg_gb = tk.LabelFrame(ui_right, text=" 📦产品配置 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+cfg_gb.pack(fill=tk.X, pady=3)
+tk.Label(cfg_gb, text="产品名称", bg="#111827", fg="white").grid(row=0,column=0,padx=5,pady=4)
+ent_prod_name = tk.Entry(cfg_gb, bg="#1f2937", fg="white")
+ent_prod_name.grid(row=0,column=1,padx=4,pady=4)
+tk.Label(cfg_gb, text="产品描述", bg="#111827", fg="white").grid(row=0,column=2,padx=5,pady=4)
+ent_prod_desc = tk.Entry(cfg_gb, bg="#1f2937", fg="white")
+ent_prod_desc.grid(row=0,column=3,padx=4,pady=4)
+tk.Button(cfg_gb, text="💾保存配置", bg="#374151", fg="white", command=save_config).grid(row=0,column=4,padx=8,pady=4)
+
+meet_gb = tk.LabelFrame(ui_right, text=" 🎤开播预演 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+meet_gb.pack(fill=tk.X, pady=3)
+txt_pre_meet = scrolledtext.ScrolledText(meet_gb, height=3, bg="#1f2937", fg="white")
+txt_pre_meet.pack(fill=tk.X, padx=4, pady=3)
+btn_meet = tk.Button(meet_gb, text="💬执行开播预演", bg="#374151", fg="white", state=tk.DISABLED, command=run_pre_meet)
+btn_meet.pack(pady=2)
+
+script_gb = tk.LabelFrame(ui_right, text=" 📜区间话术设置 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+script_gb.pack(fill=tk.X, pady=3)
+
+tk.Label(script_gb, text="区间1(0~30)", bg="#111827", fg="white").grid(row=0,column=0,padx=3,pady=2)
+ent_r1min = tk.Entry(script_gb, width=4, bg="#1f2937", fg="white"); ent_r1min.grid(row=0,column=1,padx=2,pady=2)
+tk.Label(script_gb, text="~", bg="#111827", fg="white").grid(row=0,column=2)
+ent_r1max = tk.Entry(script_gb, width=4, bg="#1f2937", fg="white"); ent_r1max.grid(row=0,column=3,padx=2,pady=2)
+ent_cmd1 = tk.Entry(script_gb, width=40, bg="#1f2937", fg="white"); ent_cmd1.grid(row=0,column=4,padx=4,pady=2)
+
+tk.Label(script_gb, text="区间2(30~100)", bg="#111827", fg="white").grid(row=1,column=0,padx=3,pady=2)
+ent_r2min = tk.Entry(script_gb, width=4, bg="#1f2937", fg="white"); ent_r2min.grid(row=1,column=1,padx=2,pady=2)
+tk.Label(script_gb, text="~", bg="#111827", fg="white").grid(row=1,column=2)
+ent_r2max = tk.Entry(script_gb, width=4, bg="#1f2937", fg="white"); ent_r2max.grid(row=1,column=3,padx=2,pady=2)
+ent_cmd2 = tk.Entry(script_gb, width=40, bg="#1f2937", fg="white"); ent_cmd2.grid(row=1,column=4,padx=4,pady=2)
+
+tk.Label(script_gb, text="区间3(100+)", bg="#111827", fg="white").grid(row=2,column=0,padx=3,pady=2)
+ent_r3min = tk.Entry(script_gb, width=4, bg="#1f2937", fg="white"); ent_r3min.grid(row=2,column=1,padx=2,pady=2)
+tk.Label(script_gb, text="~", bg="#111827", fg="white").grid(row=2,column=2)
+ent_r3max = tk.Entry(script_gb, width=4, bg="#1f2937", fg="white"); ent_r3max.grid(row=2,column=3,padx=2,pady=2)
+ent_cmd3 = tk.Entry(script_gb, width=40, bg="#1f2937", fg="white"); ent_cmd3.grid(row=2,column=4,padx=4,pady=2)
+
+tk.Label(script_gb, text="执行间隔(秒)", bg="#111827", fg="white").grid(row=3,column=0,padx=3,pady=2)
+ent_interval = tk.Entry(script_gb, width=6, bg="#1f2937", fg="white"); ent_interval.grid(row=3,column=1,padx=2,pady=2)
+
+ctrl_gb = tk.LabelFrame(ui_right, text=" 🎮直播控制 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+ctrl_gb.pack(fill=tk.X, pady=3)
+btn_audio_mode = tk.Button(ctrl_gb, text="🔊外音模式(TTS语音)", bg="#06d6a0", fg="black", width=18, state=tk.DISABLED, command=toggle_audio_mode)
+btn_audio_mode.grid(row=0,column=0,padx=4,pady=4)
+btn_live_start = tk.Button(ctrl_gb, text="▶启动直播", bg="#10b981", fg="black", width=12, state=tk.DISABLED, command=start_live)
+btn_live_start.grid(row=0,column=1,padx=4,pady=4)
+btn_live_stop = tk.Button(ctrl_gb, text="⏹停止直播", bg="#ef4444", fg="white", width=12, state=tk.DISABLED, command=stop_live)
+btn_live_stop.grid(row=0,column=2,padx=4,pady=4)
+lab_count = tk.Label(ctrl_gb, text="✅可以执行下一轮", bg="#111827", fg="#00e5ff")
+lab_count.grid(row=0,column=3,padx=10,pady=4)
+
+bottom_container = tk.Frame(ui_right, bg="#111827")
+bottom_container.pack(fill=tk.BOTH, expand=True)
+bot_left = tk.Frame(bottom_container, bg="#111827")
+bot_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+bot_right = tk.Frame(bottom_container, bg="#111827", width=270)
+bot_right.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5)
+
+stat_gb = tk.LabelFrame(bot_right, text=" 📊实时数据 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+stat_gb.pack(fill=tk.BOTH, expand=True)
+lab_sys_status = tk.Label(stat_gb, text="状态：待机【测试】✅", bg="#111827", fg="#34d399", font=("微软雅黑",11,"bold"))
+lab_sys_status.pack(pady=4)
+lab_online = tk.Label(stat_gb, text="📶 在线：0 人", bg="#111827", fg="white"); lab_online.pack(pady=2)
+lab_like = tk.Label(stat_gb, text="👍 点赞：0", bg="#111827", fg="white"); lab_like.pack(pady=2)
+lab_gift = tk.Label(stat_gb, text="🎁礼物：0", bg="#111827", fg="white"); lab_gift.pack(pady=2)
+
+danmu_gb = tk.LabelFrame(bot_left, text=" 💬弹幕消息 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+danmu_gb.pack(fill=tk.BOTH, expand=True, pady=2)
+txt_danmu = scrolledtext.ScrolledText(danmu_gb, bg="#1f2937", fg="white")
+txt_danmu.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
+
+cap_gb = tk.LabelFrame(bot_left, text=" 📸抓屏日志 ", bg="#111827", fg="#00e5ff", font=("微软雅黑",10))
+cap_gb.pack(fill=tk.X, pady=2)
+cap_bar = tk.Frame(cap_gb, bg="#111827")
+cap_bar.pack(fill=tk.X)
+lab_cap_status = tk.Label(cap_bar, text="抓屏：已停止 ⏸️", bg="#111827", fg="#fbbf24")
+lab_cap_status.pack(side=tk.LEFT, padx=5)
+btn_cap = tk.Button(cap_bar, text="开启抓屏", bg="#374151", fg="white", width=8, state=tk.DISABLED, command=start_capture)
+btn_cap.pack(side=tk.RIGHT, padx=5)
+txt_screen_log = scrolledtext.ScrolledText(cap_gb, height=4, bg="#1f2937", fg="white")
+txt_screen_log.pack(fill=tk.X, padx=3, pady=3)
+
+foot = tk.Frame(root, bg="#1f2937")
+foot.pack(fill=tk.X)
+tk.Label(foot, text="杭州智鑫科技 ©智播豆AI直播管控系统", bg="#1f2937", fg="#9ca3af").pack(pady=6)
+
+#加载配置回填UI
+cfg_load = load_config()
+ent_prod_name.insert(0, cfg_load["product_name"])
+ent_prod_desc.insert(0, cfg_load["product_desc"])
+txt_pre_meet.insert(tk.END, cfg_load["pre_meet_text"])
+ent_r1min.insert(0, cfg_load["r1_min"])
+ent_r1max.insert(0, cfg_load["r1_max"])
+ent_cmd1.insert(0, cfg_load["cmd1"])
+ent_r2min.insert(0, cfg_load["r2_min"])
+ent_r2max.insert(0, cfg_load["r2_max"])
+ent_cmd2.insert(0, cfg_load["cmd2"])
+ent_r3min.insert(0, cfg_load["r3_min"])
+ent_r3max.insert(0, cfg_load["r3_max"])
+ent_cmd3.insert(0, cfg_load["cmd3"])
+ent_interval.insert(0, cfg_load["script_interval"])
+
+init_admin_password()
+
+def on_closing():
+    stop_scrcpy_embed()
+    root.destroy()
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+root.mainloop()
