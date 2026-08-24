@@ -1,50 +1,54 @@
-import sys
-
 """
 智播豆全局运行状态机与状态变量
-兼容原项目的模块级变量直接读取 (例如 state.system_power) 
-以及面向对象的 app_state 单例访问
+包含系统电源、ADB连接、Scrcpy投屏、屏幕截图监听、消息队列、话术播控等全部全局句柄
 """
+import queue
 
 # ==============================================================================
-# 模块级全局状态变量 (兼容原项目 broadcast/power.py, gui/ui.py 等直接导入并读写)
+# 1. 异步消息与弹幕通信队列 (修复核心报错)
 # ==============================================================================
+msg_queue = queue.Queue()     # 异步消息与日志队列
+danmu_queue = queue.Queue()   # 弹幕捕获队列
 
-system_power = False          # 系统开机/总电源状态
-is_broadcasting = False       # 是否正在直播播控循环中
-is_paused = False             # 是否处于暂停状态
-current_script_index = 0      # 当前播放话术索引
-current_script_text = ""      # 当前话术内容
-device_serial = None          # 当前连接的 ADB 设备序列号
-device_connected = False      # 设备是否已连接
-scrcpy_running = False        # 投屏服务是否运行中
-auth_passed = True            # 授权认证是否通过
+# ==============================================================================
+# 2. 系统总电源与认证状态
+# ==============================================================================
+system_power = False          # 系统开机/总电源状态 (True: 已开机, False: 关机)
+auth_passed = True            # 授权激活认证状态 (True: 已激活)
+device_serial = None          # 当前选中的 ADB 手机序列号
+device_connected = False      # 手机 ADB 是否处于 online 连接状态
+start_time = None             # 开机启动时间戳 (用于计算运行计时)
 
-# 统计计数器
+# ==============================================================================
+# 3. Scrcpy 投屏与 Windows 窗口嵌入句柄
+# ==============================================================================
+scrcpy_process = None         # scrcpy.exe 启动的 subprocess.Popen 进程对象
+scrcpy_running = False        # 投屏进程是否正在运行
+scrcpy_hwnd = None            # 查找到的 Scrcpy 原生 Win32 窗口句柄 HWND
+embed_container_hwnd = None   # Tkinter 投屏嵌入容器的 HWND 句柄
+
+# ==============================================================================
+# 4. 屏幕捕获与弹幕监听状态
+# ==============================================================================
+screenshot_working = False    # 屏幕捕获模块运行状态
+screenshot_thread = None      # 屏幕捕获后台守护线程
+danmu_running = False         # 弹幕捕获模块运行状态
+danmu_thread = None           # 弹幕捕获后台守护线程
+last_danmu_text = ""          # 最近一条互动的弹幕内容
+
+# ==============================================================================
+# 5. 直播播控与话术轮播状态机
+# ==============================================================================
+is_broadcasting = False       # 是否正在自动循环播报中
+is_paused = False             # 是否被人工暂停
+current_script_index = 0      # 当前正在播放的话术索引号
+current_script_text = ""      # 当前正在播放的话术内容
 broadcast_count = 0           # 累计已播报条数
-start_time = None             # 开机/启动时间戳
+broadcast_thread = None       # 播控后台守护线程对象
 
 
 # ==============================================================================
-# 状态机封装类 (面向对象支持)
+# 兜底访问保护
 # ==============================================================================
-
-class AppState:
-    def __init__(self):
-        self.system_power = False
-        self.is_running = False
-        self.is_paused = False
-        self.current_script_index = 0
-        self.device_serial = None
-        self.device_connected = False
-
-    def __getattr__(self, name):
-        if name in globals():
-            return globals()[name]
-        return False
-
-    def __setattr__(self, name, value):
-        super().__setattr__(name, value)
-        globals()[name] = value
-
-app_state = AppState()
+def __getattr__(name):
+    return False

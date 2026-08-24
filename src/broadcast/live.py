@@ -1,74 +1,143 @@
-import os
-import sys
-import time
+import os, sys, time, threading
+import tkinter as tk
+import tkinter.messagebox as messagebox
 
-# 兼容无论是从根目录还是从 src 目录启动的导入路径
-try:
-    from src.core.state import app_state
-except (ImportError, ModuleNotFoundError, AttributeError):
-    try:
-        from core.state import app_state
-    except (ImportError, ModuleNotFoundError, AttributeError):
+from core import state
+from gui import ui
+from device.input_text import send_text_to_doubao
+from audio.vad import AudioPlaybackMonitor
+from settings import config
+from screen import capture
+
+inner_audio_mode = False
+can_next_speak = True
+live_thread = None
+
+def run_pre_meet():
+    """【执行开播预演】"""
+    if not getattr(state, 'system_power', False):
+        messagebox.showwarning("提示", "请先打开总电源（点击右上角红色电源按钮）！")
+        return
+
+    content = ""
+    if ui.txt_pre_meet:
+        content = ui.txt_pre_meet.get(1.0, tk.END).strip()
+
+    if not content:
+        messagebox.showwarning("提示", "开播预演文本框不能为空，请输入要预演的话术！")
+        return
+
+    ui.set_status("状态：⏳正在向豆包下发预演话术...", "#00e5ff")
+    ui.log_screen(f"【开播预演】正在下发: {content[:30]}...")
+
+    ok, msg = send_text_to_doubao(content, click_send=True)
+    if not ok:
+        ui.set_status("状态：❌预演下发失败", "#ff6b6b")
+        ui.log_screen(f"【开播预演】❌失败: {msg}")
+        messagebox.showerror("下发失败", f"话术未能发送到豆包对话：\n\n{msg}\n\n请确保手机已连接并停留在豆包对话界面。")
+        return
+
+    ui.set_status("状态：✅预演话术已发送到豆包", "#34d399")
+    ui.log_screen("【开播预演】✅发送成功！")
+    messagebox.showinfo("完成", "✅预演完成：话术已成功发送到豆包对话界面！")
+
+def toggle_audio_mode():
+    global inner_audio_mode
+    inner_audio_mode = not inner_audio_mode
+    if ui.btn_audio_mode:
+        if inner_audio_mode:
+            ui.btn_audio_mode.config(text="🔇内录模式(剪贴板)", bg="#333333", fg="white")
+        else:
+            ui.btn_audio_mode.config(text="🔊外音模式(TTS语音)", bg="#06d6a0", fg="black")
+
+def send_script_content(text: str):
+    global can_next_speak
+    if not can_next_speak or not getattr(state, 'is_broadcasting', False):
+        return
+
+    can_next_speak = False
+    ui.log_screen(f"【直播话术】正在发送: {text[:25]}...")
+    ok, msg = send_text_to_doubao(text, click_send=True)
+
+    if not ok:
+        ui.set_status(f"❌话术发送失败: {msg[:20]}", "#ff6b6b")
+        can_next_speak = True
+        return
+
+    threading.Thread(target=wait_next_round_worker, daemon=True).start()
+
+def wait_next_round_worker():
+    global can_next_speak
+    cfg = config.load_config()
+    interval_sec = int(cfg.get("script_interval", 15) or 15)
+
+    audio_monitor = AudioPlaybackMonitor(silence_hold_sec=0.8)
+    audio_monitor.wait_for_doubao_speech_cycle(max_wait_start_sec=4.0, max_speech_timeout_sec=45.0)
+
+    count = interval_sec
+    while count > 0 and getattr(state, 'is_broadcasting', False) and getattr(state, 'system_power', False):
+        if ui.lab_count:
+            ui.root.after(0, lambda c=count: ui.lab_count.config(text=f"⏱间隔：{c} 秒"))
+        time.sleep(1)
+        count -= 1
+
+    can_next_speak = True
+    if ui.lab_count:
+        ui.root.after(0, lambda: ui.lab_count.config(text="✅可以执行下一轮"))
+
+def auto_live_loop():
+    global can_next_speak
+    seq_index = 0
+    while getattr(state, 'is_broadcasting', False) and getattr(state, 'system_power', False):
         try:
-            from core import state
-            app_state = getattr(state, 'app_state', state)
-        except (ImportError, ModuleNotFoundError, AttributeError):
-            class DummyState:
-                is_running = True
-            app_state = DummyState()
+            if can_next_speak:
+                cfg = config.load_config()
+                if seq_index == 0:
+                    text = cfg.get("cmd1", "")
+                elif seq_index == 1:
+                    text = cfg.get("cmd2", "")
+                else:
+                    text = cfg.get("cmd3", "")
 
-try:
-    from src.device.ui_locator import click_doubao_input
-    from src.device.input_text import send_text_to_doubao
-    from src.audio.vad import AudioPlaybackMonitor
-except (ImportError, ModuleNotFoundError):
-    try:
-        from device.ui_locator import click_doubao_input
-        from device.input_text import send_text_to_doubao
-        from audio.vad import AudioPlaybackMonitor
-    except (ImportError, ModuleNotFoundError):
-        from .ui_locator import click_doubao_input
-        from .input_text import send_text_to_doubao
-        from .vad import AudioPlaybackMonitor
+                if text and text.strip():
+                    send_script_content(text.strip())
 
-def execute_live_cycle(script_text: str, device_id: str = None) -> bool:
-    """
-    【全新升级的无人值守无人直播话术播控单轮闭环】
-    1. 动态自适应聚焦输入框（跨分辨率、跨机型、跨版本兼容）
-    2. 原生系统级 UTF-8 文本直注（零 APK 依赖，毫秒级注入）
-    3. 触发发送
-    4. 启动音频感知监视器（动态跟随语流，彻底解决打断与冷场）
-    """
-    print(f"\n======== [智播豆 2.0] 开始执行话术轮播 ========")
-    print(f"话术内容: {script_text}")
-    
-    # 1. 聚焦输入框
-    click_doubao_input(device_id)
-    time.sleep(0.1)
+                seq_index = (seq_index + 1) % 3
+            time.sleep(0.5)
+        except Exception:
+            time.sleep(1)
 
-    # 2. 原生零依赖注入并点击发送
-    send_success = send_text_to_doubao(script_text, device_id, click_send=True)
-    if not send_success:
-        print("[LiveCycle] 话术注入失败")
-        return False
-    
-    print("[LiveCycle] 话术已成功注入并触发发送！")
+def start_live():
+    global live_thread, can_next_speak
+    if not getattr(state, 'system_power', False):
+        messagebox.showwarning("提示", "请先打开总电源！")
+        return
 
-    # 3. 动态音频感知检测（取代死板的 sleep 15s 倒计时）
-    audio_monitor = AudioPlaybackMonitor(device_id=device_id, silence_hold_sec=0.8)
-    audio_monitor.wait_for_doubao_speech_cycle(max_wait_start_sec=6.0, max_speech_timeout_sec=60.0)
+    state.is_broadcasting = True
+    can_next_speak = True
 
-    print("======== [智播豆 2.0] 本轮话术播报完成，无缝准备下一轮 ========\n")
-    return True
+    if ui.btn_live_start:
+        ui.btn_live_start.config(state=tk.DISABLED)
+    if ui.btn_live_stop:
+        ui.btn_live_stop.config(state=tk.NORMAL)
 
-def run_continuous_broadcast(script_list: list, device_id: str = None):
-    """
-    连续不间断自动直播循环
-    """
-    idx = 0
-    while getattr(app_state, 'is_running', True):
-        current_script = script_list[idx % len(script_list)]
-        execute_live_cycle(current_script, device_id)
-        idx += 1
-        # 轮次间微小防抖缓冲 (0.5s)
-        time.sleep(0.5)
+    ui.set_status("状态：直播运行｜顺序循环区间1‑2‑3", "#34d399")
+    ui.log_screen("【直播控制】▶ 自动直播循环已启动！")
+
+    capture.start_capture()
+    live_thread = threading.Thread(target=auto_live_loop, daemon=True)
+    live_thread.start()
+
+def stop_live():
+    state.is_broadcasting = False
+    capture.stop_capture()
+
+    if ui.btn_live_start:
+        ui.btn_live_start.config(state=tk.NORMAL)
+    if ui.btn_live_stop:
+        ui.btn_live_stop.config(state=tk.DISABLED)
+
+    ui.set_status("状态：待机【测试】✅", "#34d399")
+    if ui.lab_count:
+        ui.lab_count.config(text="✅可以执行下一轮")
+    ui.log_screen("【直播控制】⏹ 自动直播已停止。")

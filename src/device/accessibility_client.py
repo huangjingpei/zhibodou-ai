@@ -1,77 +1,96 @@
+# ==============================================================================
+# src/device/accessibility_client.py
+# 无障碍 Agent 客户端 (HTTP 端口直连 12051 -> 内存级直驱豆包)
+# ==============================================================================
 import json
-import socket
 import subprocess
 import time
-from typing import Optional, Dict, Any
-from src.core.paths import ADB_EXE
+import urllib.parse
+import urllib.request
 
-class AccessibilityClient:
-    """
-    【方案 A 客户端：Python 与 Android 常驻无障碍 Agent 通信桥梁】
-    
-    协议规范：
-    - 基于 TCP JSON-RPC (默认端口 18888)
-    - 走 ADB forward tcp:18888 tcp:18888 建立极速回环
-    - 单次发送耗时 < 3ms，零进程 fork、零坐标计算、零输入法切换
-    """
-    def __init__(self, device_id: Optional[str] = None, local_port: int = 18888):
+try:
+    from src.core.paths import ADB_EXE
+except (ImportError, ModuleNotFoundError):
+    try:
+        from core.paths import ADB_EXE
+    except (ImportError, ModuleNotFoundError):
+        ADB_EXE = "adb"
+
+
+class AccessibilityAgentClient:
+    def __init__(self, port: int = 12051, device_id: str = None):
+        self.port = port
         self.device_id = device_id
-        self.local_port = local_port
-        self.base_adb = [ADB_EXE]
-        if device_id:
-            self.base_adb.extend(["-s", device_id])
-        self.setup_forward()
+        self.base_url = f"http://127.0.0.1:{self.port}"
+        self.ensure_adb_forward()
 
-    def setup_forward(self) -> bool:
-        """建立 ADB 端口映射"""
-        cmd = self.base_adb + ["forward", f"tcp:{self.local_port}", "tcp:18888"]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        return res.returncode == 0
-
-    def _call_rpc(self, request_payload: Dict[str, Any], timeout_sec: float = 3.0) -> Optional[Dict[str, Any]]:
-        """发送 JSON-RPC 请求并获取响应"""
+    def ensure_adb_forward(self) -> bool:
+        """自动打通 PC 与手机 Agent 之间的 ADB 端口转发"""
+        cmd = [ADB_EXE]
+        if self.device_id:
+            cmd.extend(["-s", self.device_id])
+        cmd.extend(["forward", f"tcp:{self.port}", f"tcp:{self.port}"])
         try:
-            with socket.create_connection(("127.0.0.1", self.local_port), timeout=timeout_sec) as s:
-                raw_req = (json.dumps(request_payload, ensure_ascii=False) + "\n").encode('utf-8')
-                s.sendall(raw_req)
-                
-                raw_resp = s.recv(4096).decode('utf-8').strip()
-                if not raw_resp:
-                    return None
-                return json.loads(raw_resp)
-        except Exception as e:
-            return None
-
-    def ping(self) -> bool:
-        """探活无障碍服务 RPC"""
-        resp = self._call_rpc({"action": "ping"}, timeout_sec=1.0)
-        return resp is not None and resp.get("code") == 0
-
-    def send_script_direct(self, text: str, click_send: bool = True) -> bool:
-        """
-        【一键直注并触发发送】
-        由手机端无障碍服务在内存中直接触发 AccessibilityNodeInfo.performAction(ACTION_SET_TEXT)
-        """
-        resp = self._call_rpc({
-            "action": "inject_and_send",
-            "text": text,
-            "click_send": click_send
-        }, timeout_sec=4.0)
-
-        if resp and resp.get("code") == 0:
-            cost_ms = resp.get("cost_ms", 0)
-            print(f"[AccessibilityClient] 话术直注成功！手机端耗时: {cost_ms}ms")
-            return True
-        else:
-            print(f"[AccessibilityClient] 话术注入失败: {resp}")
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            return res.returncode == 0
+        except Exception:
             return False
 
-    def clear_input(self) -> bool:
-        """清空输入框"""
-        resp = self._call_rpc({"action": "clear_text"}, timeout_sec=2.0)
-        return resp is not None and resp.get("code") == 0
+    def is_agent_alive(self) -> bool:
+        """检查手机端无障碍 Agent 是否正常运行中"""
+        try:
+            url = f"{self.base_url}/ping"
+            req = urllib.request.Request(url, headers={"User-Agent": "ZhibodouClient"})
+            with urllib.request.urlopen(req, timeout=0.8) as response:
+                return response.status == 200
+        except Exception:
+            # 尝试重新 forward 再测一次
+            self.ensure_adb_forward()
+            try:
+                with urllib.request.urlopen(f"{self.base_url}/ping", timeout=0.8) as response:
+                    return response.status == 200
+            except Exception:
+                return False
 
-    def get_ui_status(self) -> Dict[str, Any]:
-        """获取当前豆包 UI 控件状态"""
-        resp = self._call_rpc({"action": "get_ui_state"}, timeout_sec=2.0)
-        return resp.get("data", {}) if resp else {}
+    def send_text_direct(self, text: str) -> bool:
+        """
+        【Agent 核心功能 1: 内存级文本直注】
+        直接在豆包当前输入框填入文字，零剪贴板、零输入法限制
+        """
+        try:
+            encoded_text = urllib.parse.quote(text)
+            url = f"{self.base_url}/set_text?text={encoded_text}"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=1.5) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                return data.get("success", False)
+        except Exception as e:
+            print(f"[AgentClient] 文本直注异常: {e}")
+            return False
+
+    def click_send_button(self) -> bool:
+        """
+        【Agent 核心功能 2: 控件级发送点击】
+        通过无障碍树直接寻找并点击豆包的发送按钮
+        """
+        try:
+            # 尝试按关键词/描述点击“发送”
+            url = f"{self.base_url}/click?text={urllib.parse.quote('发送')}"
+            with urllib.request.urlopen(url, timeout=1.5) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                if data.get("success"):
+                    return True
+        except Exception:
+            pass
+
+        # 备选：请求 Agent 触发当前活动界面的发送动作
+        try:
+            url = f"{self.base_url}/action?type=send"
+            with urllib.request.urlopen(url, timeout=1.5) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                return data.get("success", False)
+        except Exception:
+            return False
+
+# 单例
+agent_client = AccessibilityAgentClient()
