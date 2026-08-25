@@ -1,0 +1,8 @@
+configobj
+playwright~=1.29.0
+protobuf
+google-cloud
+google-cloud-vision
+brotli
+requests
+pyinstaller

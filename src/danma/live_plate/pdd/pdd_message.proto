@@ -1,0 +1,44 @@
+syntax = "proto3";
+message TitanDownstream{
+  string command = 1;
+  uint32 protocol = 2;
+  uint32 errorCode = 3;
+  uint32 bizCode = 4;
+  string bizErrorMsg = 5;
+  uint32 compress = 6;
+  bytes extension = 9;
+  bytes body = 10;
+  uint64 downstreamSeq = 11;
+  uint64 conId = 12;
+  uint64 ctxId = 13;
+
+
+}
+
+message MulticastLite{
+  uint32 bizType = 1;
+  string groupId = 2;
+  string msgId= 3;
+  bytes payload = 4;
+  bool needAck = 5;
+
+}
+
+message MulticastNotify{
+  uint32 bizType = 1;
+  string groupId = 2;
+  uint64 offset = 3;
+  uint64 ts = 4;
+  uint32 minInterval = 5;
+  uint32 maxInterval = 6;
+  bytes payload = 7;
+  bool needAck = 8;
+
+
+
+
+
+
+
+
+}

@@ -1,0 +1,49 @@
+环境配置 python版本>3.6：
+pip install -r requirements.txt
+
+启动main.py
+
+打包：
+pyinstaller -F -w main.py
+
+===============================
+2025.6.7
+优化小红书 淘宝 pdd
+----------------
+plat:"小红书"
+注释：固定地址，浏览器启动主播扫码登录
+https://redlive.xiaohongshu.com/live_center_control
+
+----------------
+plat:"淘宝"
+注释：固定地址，浏览器启动主播扫码登录
+https://liveplatform.taobao.com/restful/index/live/list
+
+----------------
+plat:"拼多多"
+注释：固定地址，浏览器启动，主播扫码登录
+https://live.pinduoduo.com/n-creator/live/live-record
+
+---------------
+
+plat:"视频号"
+注释：固定地址，浏览器启动，主播扫码登录
+https://channels.weixin.qq.com/platform/live/liveBuild
+===============================
+
+
+
+
+2025.3.3更新==
+修复浏览器bug
+新增淘宝平台
+新增小红书平台
+
+2025.2.17更新====
+删除网站直播视频
+弹幕不更新
+
+2025.2.16更新====
+新增字段
+1. {'type': 'SystemMessage', 'content': '请关闭google再启动'}
+2. {'type': 'SystemMessage', 'content': '请安装google'}

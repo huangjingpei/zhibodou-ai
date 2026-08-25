@@ -1,0 +1,621 @@
+syntax = "proto3";
+//./protoc --python_out=./ student.proto
+
+message PushFrame1{
+  int64 seqid1 = 1;
+  int64 logid1 = 2;
+  int64 service1 = 3;
+  int64 method1 = 4;
+  repeated PushHeader1 headersList1 = 5;
+  string palyloadEncoding1 = 6;
+  string payloadtype1 = 7;
+  bytes palyload1 = 8;
+}
+
+message PushHeader1{
+  string key1 = 1;
+  string value1 = 2;
+}
+
+
+message Response1{
+    repeated Message1 messages1 = 1;
+    string cursor1 = 2;
+    int64 fetchInterval1 = 3;
+    int64 now1 = 4;
+    string internalExt1 = 5;
+    int32 fetchType1 = 6;
+    map<string, string> routeParams1 = 7;
+    int64 heartbeatDuration1 = 8;
+    bool needAck1 = 9;
+    string pushServer1 = 10;
+}
+
+message Message1{
+    string method1 = 1;
+    bytes payload1 = 2;
+    int64 msgId1 = 3;
+    int32 msgType1 = 4;
+    int64 offset1 = 5;
+}
+
+message RoomUserSeqMessage1 {
+    Common1 common1 = 1;
+    repeated Contributor1 ranks1 = 2;
+    int64 total1 = 3;
+    string popStr1 = 4;
+    repeated Contributor1 seats1 = 5;
+    int64 popularity1 = 6;
+    int64 totalUser1 = 7;
+    string totalUserStr1 = 8;
+    string totalStr1 = 9;
+    string onlineUserForAnchor1 = 10;
+    string totalPvForAnchor1 = 11;
+
+    message Contributor1 {
+        int64 score1 = 1;
+        User1 user1 = 2;
+        int64 rank1 = 3;
+        int64 delta1 = 4;
+        bool isHidden1 = 5;
+        string scoreDescription1 = 6;
+        string exactlyScore1 = 7;
+    }
+}
+
+message GiftMessage1 {
+    Common1 common1 = 1;
+    int64 giftId1 = 2;
+    int64 fanTicketCount1 = 3;
+    int64 groupCount1 = 4;
+    int64 repeatCount1 = 5;
+    int64 comboCount1 = 6;
+    User1 user1 = 7;
+    User1 toUser1 = 8;
+    int32 repeatEnd1 = 9;
+    TextEffect1 textEffect1 = 10;
+    int64 groupId1 = 11;
+    int64 incomeTaskgifts1 = 12;
+    int64 roomFanTicketCount1 = 13;
+    GiftIMPriority1 priority = 14;
+    GiftStruct1 gift1 = 15;
+    string logId1 = 16;
+    int64 sendType1 = 17;
+    PublicAreaCommon1 publicAreaCommon1 = 18;
+    Text1 trayDisplayText1 = 19;
+    int64 bannedDisplayEffects1 = 20;
+    GiftTrayInfo1 trayInfo1 = 21;
+    AssetEffectMixInfo1 assetEffectMixInfo1 = 24;
+
+    message TextEffect1{
+        Detail1 portrait1 = 1;
+        Detail1 landscape1 = 2;
+
+        message Detail1 {
+            Text1 text1 = 1;
+            int32 textFontSize1 = 2;
+            Image1 background1 = 3;
+            int32 start1 = 4;
+            int32 duration1 = 5;
+            int32 x1 = 6;
+            int32 y1 = 7;
+            int32 width1 = 8;
+            int32 height1 = 9;
+            int32 shadowDx1 = 10;
+            int32 shadowDy1 = 11;
+            int32 shadowRadius1 = 12;
+            string shadowColor1 = 13;
+            string strokeColor1 = 14;
+            int32 strokeWidth1 = 15;
+        }
+    }
+}
+
+message LikeMessage1 {
+   Common1 common1 = 1;
+   int64 count1 = 2;
+   int64 total1 = 3;
+   int64 color1 = 4;
+   User1 user1 = 5;
+   string icon1 = 6;
+}
+
+message ChatMessage1 {
+    Common1 common1 = 1;
+    User1 user1 = 2;
+    string content1 = 3;
+    bool visibleToSender1 = 4;
+    Image1 backgroundImage1 = 5;
+    string fullScreenTextColor1 = 6;
+    Image1 backgroundImageV21 = 7;
+    PublicAreaCommon1 publicAreaCommon1 = 9;
+    Image1 giftImage1 = 10;
+}
+
+message SocialMessage1 {
+    Common1 common1 = 1;
+    User1 user1 = 2;
+    int64 shareType1 = 3;
+    int64 action1 = 4;
+    string shareTarget1= 5;
+    int64 followCount1 = 6;
+    PublicAreaCommon1 publicAreaCommon1 = 7;
+}
+
+message MemberMessage1{
+    Common1 common1 = 1;
+    User1 user1 = 2;
+    int64 memberCount1 = 3;
+    User1 operator1 = 4;
+    bool isSetToAdmin1 = 5;
+    bool isTopUser1 = 6;
+    int64 rankScore1 = 7;
+    int64 topUserNo1 = 8;
+    int64 enterType1 = 9;
+    int64 action1 = 10;
+    string actionDescription1 = 11;
+    int64 userId1 = 12;
+    EffectConfig1 effectConfig1 = 13;
+    string popStr1 = 14;
+    EffectConfig1 enterEffectConfig1 = 15;
+    Image1 backgroundImage1 = 16;
+    Image1 backgroundImageV21 = 17;
+    Text1 anchorDisplayText1 = 18;
+    string  clientEnterSource1 = 19;
+    string clientEnterType1 = 20;
+    string clientLiveReason1 = 21;
+    int64 actionDuration1 = 22;
+    string userShareType1 = 23;
+    DisplayStyle1 displayStyle1 = 24;
+    int64 kickSource1 = 26;
+
+
+
+    message EffectConfig1{
+        int64 type1 = 1;
+        Image1 icon1 = 2;
+        int64 avatarPos1 = 3;
+        Text1 text1 = 4;
+        Image1 textIcon1 = 5;
+        int32 stayTime1 = 6;
+        int64 animAssetId1 = 7;
+        Image1 badge1 = 8;
+        repeated int64 flexSettingArray1 = 9;
+        Image1 textIconOverlay1 = 10;
+        Image1 animatedBadge1 = 11;
+        bool hasSweepLight1 = 12;
+        repeated int64 textFlexSettingArray1 = 13;
+        int64 centerAnimAssetId1 = 14;
+    }
+
+    enum DisplayStyle1{
+
+        unknow = 0;
+    }
+}
+
+message ControlMessage1 {
+    Common1 common1 = 1;
+    int32 status1 = 2;
+}
+
+message FansclubMessage1 {
+	Common1 commonInfo1 = 1;
+	// 升级是1，加入是2
+	int32 type1 = 2;
+	string content1 = 3;
+	User1 user1 = 4;
+}
+message RoomMessage1{
+    Common1 common1=1;
+    string Content1 = 2;
+    bool supprotLandscape1 = 3;
+    string bizScene1 = 20;
+}
+message RoomIntroMessage1{
+
+    Common1 common1 = 1;
+    User1 user1 = 2;
+    int64 style1 = 3;
+    string intro1 = 4;
+        repeated string labelList1 = 5;
+}
+
+message Common1{
+    string method1 = 1;
+    int64 msgId1 = 2;
+    int64 roomId1 = 3;
+    int64 createTime1 = 4;
+    int32 monitor1 = 5;
+    bool isShowMsg1 = 6;
+    string describe1 = 7;
+    Text1 displayText1 = 8;
+    int64 foldType1 = 9;
+    int64 anchorFoldType1 = 10;
+    int64 priorityScore1 = 11;
+    string logId1 = 12;
+    string msgProcessFilterK1 = 13;
+    string msgProcessFilterV1 = 14;
+    string fromIdc1 = 15;
+    string toIdc1 = 16;
+    repeated string filterMsgTagsList1= 17;
+
+}
+
+message Text1{
+    string key1 = 1;
+    string defaultPattern1 = 2;
+    TextFormat1 defaultFormat1 = 3;
+
+}
+
+message Room1 {
+    int64 id1 = 1;
+    string idStr1 = 2;
+    int64 status1 = 3;
+    int64 ownerUserId1 = 4;
+    string title1 = 5;
+    int64 userCount1 = 6;
+    int64 createTime1 = 7;
+    int64 linkmicLayout1 = 8;
+    int64 finishTime1 = 9;
+    RoomExtra1 extra1= 10;
+    string dynamicCoverUri1 = 11;
+    map<int64, string> dynamicCoverDict1= 12;
+    int64 lastPingTime1 = 13;
+    int64 liveId1 = 14;
+    int64 streamProvider1 = 15;
+    int64 osType1 = 16;
+    int64 clientVersion1 = 17;
+    bool withLinkmic1 = 18;
+    bool enableRoomPerspective1 = 19;
+    Image1 cover1 = 20;
+    Image1 dynamicCover1 = 21;
+    Image1 dynamicCoverLow1 = 22;
+    string shareUrl1 = 23;
+    string anchorShareText1 = 24;
+    string userShareText1 = 25;
+    int64 streamId1 = 26;
+    string streamIdStr1 = 27;
+    StreamUrl1 streamUrl1 = 28;
+    int64 mosaicStatus1 = 29;
+    string mosaicTip1 = 30;
+    int64 cellStyle1 = 31;
+    LinkMic1 linkMic1 = 32;
+    int64 luckymoneyNum1 = 33;
+    repeated Decoration1 decoList1 = 34;
+    repeated TopFan1 topFans1 = 35;
+    RoomStats1 stats1 = 36;
+    string sunDailyIconContent1 = 37;
+    string distance1 = 38;
+    string distanceCity1 = 39;
+    string location1 = 40;
+    string realDistance1 = 41;
+    Image1 feedRoomLabel1 = 42;
+    string commonLabelList1 = 43;
+    RoomUserAttr1 livingRoomAttrs1 = 44;
+    repeated int64 adminUserIds1 = 45;
+    User1 owner1 = 46;
+    string privateInfo1 = 47;
+}
+
+message RoomExtra1{
+
+}
+
+message RoomStats1{
+
+}
+
+message RoomUserAttr1{
+
+}
+
+message StreamUrl1{
+
+}
+
+message LinkMic1 {
+
+}
+
+message Decoration1{
+
+}
+
+message TopFan1 {
+
+}
+
+message User1{
+
+    int64 deprecated1 = 2;
+    string nickname1 = 3;
+    int32 deprecated2 = 4;
+    string bioDescription = 5;
+    int32 deprecated3 = 6;
+    int64 deprecated4 = 7;
+    string deprecated5 = 8;
+    Image1 avatarThumb1 = 9;
+    Image1 avatarMedium1 = 10;
+    Image1 avatarLarge1 = 11;
+    bool verified1 = 12;
+    int32 deprecated6 = 13;
+    string deprecated7 = 14;
+    int32 status1 = 15;
+    int64 createTime1= 16;
+    int64 modifyTime1 = 17;
+    int32 secret1 = 18;
+    string shareQrcodeUri1 = 19;
+    int32 deprecated8 = 20;
+    Image1 badgeImageList1 = 21;
+    FollowInfo1 followInfo1 = 22;
+    PayGrade1 payGrade1 = 23;
+    FansClub1 fansClub1 = 24;
+    Border1 border1 = 25;
+    string specialId1 = 26;
+    Image1 avatarBorder1 = 27;
+    Image1 medal1 = 28;
+    repeated Image1 realTimeIcons1 = 29;
+    repeated Image1 newRealTimeIcons1 = 30;
+    int64 topVipNo1 = 31;
+    int64 payScore1 = 34;
+    int64 ticketCount1 = 35;
+    AnchorInfo1 anchorInfo1 = 36;
+    int32 linkMicStats1 = 37;
+    message UserAttr1 {
+
+    }
+
+    message OwnRoom1 {
+
+    }
+
+    message AnchorInfo1 {
+
+    }
+
+    message FollowInfo1 {
+        int64 followingCount1 = 1;
+        int64 followerCount1 = 2;
+        int64 followStatus1 = 3;
+        int64 pushStatus1 = 4;
+
+    }
+
+    message FansClub1{
+        FansClubData1 data1 = 1;
+        map<int32, FansClubData1> preferData1 = 2;
+
+        message FansClubData1 {
+            string clubName1 = 1;
+            int32 level1 = 2;
+            int32 userFansClubStatus1 = 3;
+            UserBadge1 badge1 = 4;
+            repeated int64 availableGiftIds1 = 5;
+            int64 anchorId1 = 6;
+
+            message UserBadge1 {
+                map<int32, Image1> icons1 = 1;
+                string title1 = 2;
+            }
+        }
+    }
+
+    message Border1{
+
+    }
+
+    message GradeBuffInfo1 {
+        int64 buffLevel1 = 1;
+        int32 status1 = 2;
+        int64 endTime1 = 3;
+        map<int64, int64> statsInfo1 = 4;
+        Image1 buffBadge1 = 5;
+    }
+
+    message PayGrade1 {
+        int64 deprecated20 = 1;
+        Image1 diamondIcon1 = 2;
+        string name1 = 3;
+        Image1 icon1 = 4;
+        string nextName1 = 5;
+        int64 level1 = 6;
+        Image1 nextIcon1 = 7;
+        int64 deprecated22 = 8;
+        int64 deprecated23 = 9;
+        int64 deprecated24 = 10;
+        int64 deprecated25 = 11;
+        int64 deprecated26 = 12;
+        string gradeDescribe1 = 13;
+        repeated GradeIcon1 gradeIconList1 = 14;
+        int64 screenChatType1 = 15;
+        Image1 imIcon1 = 16;
+        Image1 imIconWithLevel1 = 17;
+        Image1 liveIcon1 = 18;
+        Image1 newImIconWithLevel1 = 19;
+        Image1 newLiveIcon1 = 20;
+        int64 upgradeNeedConsume1 = 21;
+        string nextPrivileges1 = 22;
+        Image1 background1 = 23;
+        Image1 backgroundBack1 = 24;
+        int64 score1 = 25;
+
+        string gradeBanner1 = 1001;
+        Image1 profileDialogBg1 = 1002;
+        Image1 profileDialogBgBack1 = 1003;
+
+        message GradeIcon1{
+            Image1 icon1 = 1;
+            int64 iconDiamond1 = 2;
+            int64 level1 = 3;
+            string levelStr1 = 4;
+        }
+    }
+}
+
+message TextFormat1{
+    string color1 = 1;
+    bool bold1 = 2;
+    bool italic1 = 3;
+    int32 weight1 = 4;
+    int32 italicAngle1 = 5;
+    int32 fontSize1 = 6;
+    bool userHeightLightColor1 = 7;
+    bool useRemoteClor1 = 8;
+}
+
+message TextPiece1{
+    int32 type1 = 1;
+    TextFormat1 format1 = 2;
+    string stringValue1 = 11;
+    TextPieceUser1 userValue1 = 21;
+}
+
+message Image1{
+    repeated string urlList1= 1;
+    string uri1 = 2;
+    int64 height1 = 3;
+    int64 width1 = 4;
+    string avgColor1 = 5;
+    int32 imageType1 = 6;
+    string openWebUrl1 = 7;
+    Content1 content1 = 8;
+    bool isAnimated1 = 9;
+
+    message Content1 {
+        string name1 = 1;
+        string fontColor1 = 2;
+        int64 level1 = 3;
+        string alternativeText1 = 4;
+    }
+}
+
+message TextPieceUser1{
+    User1 user1 = 1;
+    bool withColon1 = 2;
+}
+
+message PublicAreaCommon1 {
+    Image1 userLabel1 = 1;
+    int64 userConsumeInRoom1 = 2;
+    int64 userSendGiftCntInRoom1= 3;
+}
+
+message GiftIMPriority1 {
+    repeated int64 queueSizes1 = 1;
+    int64 selfQueuePriority1 = 2;
+    int64 priority1 = 3;
+}
+
+message GiftTrayInfo1{
+    Text1 trayDisplayText1 = 1;
+    Image1 trayBaseImg1 = 2;
+    Image1 trayHeadImg1 = 3;
+    Image1 trayRightImg1 = 4;
+    int64 trayLevel1 = 5;
+    Image1 trayDynamicImg1 = 6;
+}
+
+message GiftStruct1 {
+    Image1 image1 = 1;
+    string describe1 = 2;
+    bool notify1 = 3;
+    int64 duration1 = 4;
+    int64 id1 = 5;
+    GiftStructFansClubInfo1 fansclubInfo1 = 6;
+    bool forLinkmic1 = 7;
+    bool doodle1 = 8;
+    bool forFansclub1 = 9;
+    bool combo1 = 10;
+    int32 type1 = 11;
+    int32 diamondCount1 = 12;
+    int32 isDisplayedOnPanel1 = 13;
+    int64 primaryEffectId1 = 14;
+    Image1 giftLabelIcon1 = 15;
+    string name1 = 16;
+    string region1 = 17;
+    string manual1 = 18;
+    bool forCustom1 = 19;
+    map<string, int64> specialEffects1 = 20;
+    Image1 icon1 = 21;
+    int32 actionType1 = 22;
+    int32 watermelonSeeds1 = 23;
+    string goldEffect1 = 24;
+    repeated LuckyMoneyGiftMeta1 subs1 = 25;
+    int64 goldenBeans1 = 26;
+    int64 honorLevel1 = 27;
+    int32 itemType1 = 28;
+    string schemeUrl1 = 29;
+    GiftPanelOperation1 giftOperation1 = 30;
+    string eventName1 = 31;
+    int64 nobleLevel1 = 32;
+    string guideUrl1 = 33;
+    bool punishMedicine1 = 34;
+    bool forPortal1 = 35;
+    string businessText1 = 36;
+    bool cnyGift1 = 37;
+    int64 appId1 = 38;
+    int64 vipLevel1 = 39;
+    bool isGray1 = 40;
+    string graySchemeUrl1 = 41;
+    int64 giftScene1 = 42;
+    GiftBanner1 giftBanner1 = 43;
+    repeated string triggerWords1 = 44;
+    repeated GiftBuffInfo1 giftBuffInfos1 = 45;
+    bool forFirstRecharge1= 46;
+    Image1 dynamicImgForSelected1 = 47;
+    int32 afterSendAction1 = 48;
+    int64 giftOfflineTime1 = 49;
+    string topBarText1 = 50;
+    Image1 topRightAvatar1 = 51;
+    string bannerSchemeUrl1 = 52;
+    bool isLocked1 = 53;
+    int64 reqExtraType1 = 54;
+    repeated int64 assetIds1 = 55;
+    GiftPreviewInfo1 giftPreviewInfo1 = 56;
+    GiftTip1 giftTip1 = 57;
+    int32 needSweepLightCount1 = 58;
+    repeated GiftGroupInfo1 groupInfo1 = 59;
+
+    message GiftStructFansClubInfo1 {
+        int32 minLevel1 = 1;
+        int32 insertPos1 = 2;
+    }
+}
+
+message AssetEffectMixInfo1{
+
+}
+
+message LuckyMoneyGiftMeta1 {
+
+}
+
+message GiftPanelOperation1 {
+
+}
+
+message GiftBanner1 {
+
+}
+
+message GiftBuffInfo1{
+
+}
+
+message GiftPreviewInfo1{
+
+}
+
+message GiftTip1 {
+
+}
+
+message GiftGroupInfo1 {
+
+}
+
+message EffectMixImageInfo1 {
+
+}
