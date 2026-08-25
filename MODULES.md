@@ -36,14 +36,15 @@ src/
 │   └── wake_unlock.py       # 灭屏/锁屏检测 + 亮屏唤醒 + 自动拉起豆包到对话页
 ├── screen/                  # 投屏与画面
 │   ├── win_embed.py         # Windows 原生 API：嵌入 scrcpy 窗口并锁死样式
-│   ├── scrcpy_embed.py      # scrcpy 子进程启停、窗口嵌入
+│   ├── scrcpy_embed.py      # scrcpy 子进程启停、窗口嵌入（视频低码率/低帧率 + 音频低延迟 PCM；分级回退防单参数不兼容）
 │   ├── capture.py           # 定时截图抓屏 + 日志刷新
 │   └── danmu.py             # 弹幕/礼物/点赞解析 + WebSocket 接收循环
 ├── broadcast/               # 直播业务
 │   ├── live.py              # 开播预演、区间话术循环、音频模式、启停
 │   └── power.py             # 总电源开关 + 开机自检
 ├── audio/                   # 语音
-│   └── tts.py               # TTS 语音播报（外音模式）
+│   ├── tts.py               # TTS 语音播报（外音模式）
+│   └── vad.py               # VAD 本地语音活动检测（只读旁听，驱动下一轮话术）
 └── gui/                     # 界面
     ├── ui.py                # 构建全部 Tk 界面、暴露控件引用、set_status()
     └── dialogs.py           # 密码修改 / 授权管理弹窗
@@ -66,10 +67,11 @@ src/
 | `screen/danmu.py` | screen | 弹幕解析 + WS 接收 | `parse_danmu()` `ws_danmu_loop()` |
 | `screen/capture.py` | screen | 定时截图抓屏 | `screen_capture_loop()` `start_capture()` `stop_capture()` |
 | `audio/tts.py` | audio | TTS 播报 | `speak_text()` |
+| `audio/vad.py` | audio | VAD 监听豆包语流，驱动下一轮 | `AudioPlaybackMonitor` `list_audio_input_devices()` `quick_probe()` |
 | `broadcast/live.py` | broadcast | 直播控制 | `run_pre_meet()` `start_live()` `stop_live()` `send_script_content()` |
 | `broadcast/power.py` | broadcast | 总电源 + 自检 | `toggle_power()` `power_on_self_check()` |
 | `gui/dialogs.py` | gui | 密码/授权弹窗 | `dialog_modify_pwd()` `dialog_auth_mgr()` |
-| `gui/ui.py` | gui | 构建 Tk 界面、set_status | `build_ui()` `set_status()` `ui.root` `ui.btn_power` ... |
+| `gui/ui.py` | gui | 构建 Tk 界面、set_status、音量指示条 | `build_ui()` `set_status()` `set_volume_meter()` `reset_volume_meter()` `ui.root` `ui.btn_power` ... |
 | `main.py` | （入口） | 构建 UI、接线回调、初始化、主循环 | `main()` |
 
 > `gui.ui` 里的控件（`ui.btn_power`、`ui.lab_sys_status`、`ui.embed_container`）以**模块级变量**形式暴露，其他模块通过 `from gui import ui` 读写，避免在逻辑模块里散落 `global`。
@@ -131,6 +133,23 @@ screen.win_embed    ── (ctypes / pygetwindow)
 
 ### 4.4 自动直播循环
 `broadcast.live.start_live()` → 起 `ws_danmu_loop()`（弹幕）+ `auto_live_loop()`（按区间 1→2→3 循环调 `send_script_content`）+ `screen.capture.start_capture()`；每次发送后 `count_down_work()` 倒计时，结束才解除 `can_next_speak` 节流锁。
+
+### 4.5 VAD 音频源选择与 OBS 路由
+VAD（`audio/vad.py`）只读旁听电脑本地音频【输入】设备，判断豆包是否在说话，**不改原始音频数据**。
+scrcpy 与 VAD 是两个独立进程，靠 Windows 音频回环设备桥接。**声音链路**：
+`手机发声 → ADB → scrcpy(经 SDL2) → 【CABLE Input 虚拟线】→ CABLE Output 镜像 → ①VAD 旁听 ②OBS 捕获 ③(开侦听)扬声器`。
+其中 **scrcpy 往哪送** 由 `settings/config.py` 的 `scrcpy_audio_output_device` 控制（启动 scrcpy 时注入 `SDL_AUDIO_DEVICE_NAME`，只定向 scrcpy 的音频、不影响系统其他声音）；**VAD 从哪收** 由 `vad_input_device` 控制。两者必须成对（均为 Virtual Cable / 均为 Voicemeeter）。
+
+| 场景 | scrcpy_audio_output_device（送） | vad_input_device（收） | OBS 侧处理 |
+|---|---|---|---|
+| **OBS 用户首选** | 留空（用系统默认播放设备） | 留空（启用 Windows「立体声混音」后自动命中） | OBS「桌面音频」自动包含豆包、你也能正常听，零改动 |
+| 用 VB-Audio Virtual Cable | `"CABLE Input (VB-Audio Virtual Cable)"` | `"CABLE Output"` | OBS 加「CABLE Output 音频输入捕获」；需给 CABLE Output 开「侦听」才能用耳朵听 |
+| 用 Voicemeeter | `"VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)"` | `"VoiceMeeter Output"` | 1 源→多消费者正解：扇出到扬声器 + 虚拟输出，OBS 与 VAD 各读一份 |
+
+- 多个程序可同时读同一输入设备（Windows 共享模式），VAD 与 OBS **不冲突**。
+- `SDL_AUDIO_DEVICE_NAME` 对设备名大小写/空格敏感，填错会静默回退到默认设备；接不上就跑 `python -m src.audio.vad` 核对设备全名，或把 `CABLE Input` 直接设成 Windows 默认播放设备作为兜底。
+- 不确定设备名？运行 `python -m src.audio.vad`（或看开机自检日志）会列出所有输入设备与索引，带「回环/混音」标记的就是该填的；也可直接填索引数字（如 `"3"`）。
+- 没装 pyaudio / 没有任何输入设备时，VAD 自动旁路为「固定等待」并在日志明确告警，不会假生效。
 
 ---
 

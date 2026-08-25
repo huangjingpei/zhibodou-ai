@@ -12,6 +12,8 @@ lab_like = None
 lab_gift = None
 lab_cap_status = None
 lab_count = None
+volume_canvas = None
+lab_vad_state = None
 embed_container = None
 txt_danmu = None
 txt_screen_log = None
@@ -48,14 +50,64 @@ def set_status(msg, color="#ff6b6b"):
 
 
 def log_screen(msg):
-    """线程安全地向屏幕日志文本框追加一行；GUI 未就绪时退化为 print。"""
+    """线程安全地向屏幕日志文本框追加一行；GUI 未就绪时退化为 print。
+    同时回显到控制台(stdout)，便于在 PyCharm / 终端直接观察所有日志
+    （含启动 VAD 探针、直播实时 dB），无需切换到软件界面日志面板。"""
+    try:
+        print(msg)
+    except Exception:
+        pass
     try:
         def _do():
             txt_screen_log.insert(tk.END, msg + "\n")
             txt_screen_log.see(tk.END)
         root.after(0, _do)
     except Exception:
-        print("[屏幕日志]", msg)
+        pass  # 控制台已回显，GUI 未就绪时无需再打
+
+
+def set_volume_meter(db, avg=None, speaking=False, silence_elapsed=None, silence_hold=None):
+    """线程安全：根据实时分贝刷新音量指示条。
+    db            —— 当前帧分贝(dBFS，约 -60~0)
+    speaking      —— 是否正在说话(均值>阈值)
+    silence_elapsed/silence_hold —— 静音已持续/需持续秒数(用于显示'X/Ys 跳下一句')
+    条宽随音量大小变化、说话时绿色闪动；GUI 未就绪时静默跳过。"""
+    try:
+        # dB 映射到 0~1：约 -60dB→0， -10dB→1
+        level = max(0.0, min(1.0, (float(db) + 60.0) / 50.0))
+        w = int(240 * level)
+
+        def _do():
+            volume_canvas.delete("all")
+            if speaking:
+                # 说话中：绿色，亮度随音量(闪动感)
+                fill = "#10b981" if level > 0.45 else "#34d399"
+                volume_canvas.create_rectangle(0, 0, w, 16, fill=fill, outline="")
+            else:
+                volume_canvas.create_rectangle(0, 0, w, 16, fill="#374151", outline="")
+            # 状态文字
+            if speaking:
+                lab_vad_state.config(text="🔊 说话中 (%.0fdB)" % db, fg="#34d399")
+            elif silence_elapsed is not None and silence_hold is not None:
+                lab_vad_state.config(text="🔇 静音 %.1f/%.1fs｜满跳下一句" % (silence_elapsed, silence_hold),
+                                     fg="#fbbf24")
+            else:
+                lab_vad_state.config(text="🔇 监听中…", fg="#9ca3af")
+
+        root.after(0, _do)
+    except Exception:
+        pass
+
+
+def reset_volume_meter():
+    """把音量指示条复位到空闲态。"""
+    try:
+        def _do():
+            volume_canvas.delete("all")
+            lab_vad_state.config(text="🔇 待机", fg="#9ca3af")
+        root.after(0, _do)
+    except Exception:
+        pass
 
 
 def build_ui():
@@ -64,6 +116,7 @@ def build_ui():
     global embed_container, txt_danmu, txt_screen_log, txt_pre_meet
     global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_audio_mode, btn_cap
     global btn_pwd, btn_auth, btn_save
+    global volume_canvas, lab_vad_state
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
 
@@ -165,6 +218,16 @@ def build_ui():
     btn_live_stop.grid(row=0, column=2, padx=4, pady=4)
     lab_count = tk.Label(ctrl_gb, text="✅可以执行下一轮", bg="#111827", fg="#00e5ff")
     lab_count.grid(row=0, column=3, padx=10, pady=4)
+
+    # 实时音量指示条：随豆包音量大小闪动；静音时显示"X/Ys 跳下一句"
+    vol_frame = tk.Frame(ctrl_gb, bg="#111827")
+    vol_frame.grid(row=1, column=0, columnspan=4, sticky="we", padx=4, pady=(2, 6))
+    tk.Label(vol_frame, text="🔊音量", bg="#111827", fg="#9ca3af", font=("微软雅黑", 9)).pack(side=tk.LEFT, padx=2)
+    volume_canvas = tk.Canvas(vol_frame, width=240, height=16, bg="#1f2937", highlightthickness=0)
+    volume_canvas.pack(side=tk.LEFT, padx=4)
+    lab_vad_state = tk.Label(vol_frame, text="🔇 待机", bg="#111827", fg="#9ca3af",
+                             font=("微软雅黑", 9), width=26, anchor="w")
+    lab_vad_state.pack(side=tk.LEFT, padx=4)
 
     bottom_container = tk.Frame(ui_right, bg="#111827")
     bottom_container.pack(fill=tk.BOTH, expand=True)

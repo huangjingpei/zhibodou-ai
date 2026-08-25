@@ -38,8 +38,9 @@ def run_pre_meet():
         return
 
     ui.set_status("状态：✅预演话术已发送到豆包", "#34d399")
-    ui.log_screen("【开播预演】✅发送成功！")
-    messagebox.showinfo("完成", "✅预演完成：话术已成功发送到豆包对话界面！")
+    ui.log_screen("【开播预演】✅发送成功！(预演为单次演示：不倒计时、不触发 VAD；点「正式开播」才用 VAD 静音检测切话术)")
+    if ui.lab_count:
+        ui.root.after(0, lambda: ui.lab_count.config(text="✅预演完成(可点正式开播)"))
 
 def toggle_audio_mode():
     global inner_audio_mode
@@ -69,17 +70,19 @@ def send_script_content(text: str):
 def wait_next_round_worker():
     global can_next_speak
     cfg = config.load_config()
-    interval_sec = int(cfg.get("script_interval", 15) or 15)
+    silence_hold = float(cfg.get("vad_silence_hold_sec", 2.0) or 2.0)
+    wait_start = float(cfg.get("vad_wait_start_sec", 15.0) or 15.0)
+    speak_confirm = float(cfg.get("vad_speak_confirm_sec", 0.3) or 0.3)
+    max_speech = float(cfg.get("vad_max_speech_sec", 45.0) or 45.0)
 
-    audio_monitor = AudioPlaybackMonitor(silence_hold_sec=0.8, log_fn=ui.log_screen)
-    audio_monitor.wait_for_doubao_speech_cycle(max_wait_start_sec=4.0, max_speech_timeout_sec=45.0)
-
-    count = interval_sec
-    while count > 0 and getattr(state, 'is_broadcasting', False) and getattr(state, 'system_power', False):
-        if ui.lab_count:
-            ui.root.after(0, lambda c=count: ui.lab_count.config(text=f"⏱间隔：{c} 秒"))
-        time.sleep(1)
-        count -= 1
+    ui.reset_volume_meter()
+    ui.log_screen(f"【VAD】本轮监听中：先等豆包开口(思考等待≤{wait_start:.0f}s)，开口后静音超 {silence_hold:.1f}s 即切入下一段话术")
+    audio_monitor = AudioPlaybackMonitor(silence_hold_sec=silence_hold,
+                                         speak_confirm_sec=speak_confirm,
+                                         log_fn=ui.log_screen, on_level=ui.set_volume_meter)
+    # 切话术完全由 VAD 静音时长驱动：豆包说完后连续静音超 silence_hold 即判"说完了"，立即放行下一句。
+    audio_monitor.wait_for_doubao_speech_cycle(max_wait_start_sec=wait_start, max_speech_timeout_sec=max_speech)
+    ui.reset_volume_meter()
 
     can_next_speak = True
     if ui.lab_count:
@@ -124,6 +127,7 @@ def start_live():
     ui.set_status("状态：直播运行｜顺序循环区间1‑2‑3", "#34d399")
     ui.log_screen("【直播控制】▶ 自动直播循环已启动！")
 
+    ui.reset_volume_meter()
     capture.start_capture()
     live_thread = threading.Thread(target=auto_live_loop, daemon=True)
     live_thread.start()

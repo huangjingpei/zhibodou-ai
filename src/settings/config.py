@@ -21,7 +21,38 @@ DEFAULT_CFG = {
     "r1_min": "0", "r1_max": "30", "cmd1": "留人话术内容填这里",
     "r2_min": "30", "r2_max": "100", "cmd2": "产品讲解话术内容填这里",
     "r3_min": "100", "r3_max": "9999", "cmd3": "逼单促单话术内容填这里",
-    "script_interval": 25
+    # 注：script_interval 已不再作为切话术依据（切话术改由 VAD 静音时长驱动），保留仅为兼容界面配置，可忽略。
+    "script_interval": 25,
+    # 音频相关（仅 VAD 监听；scrcpy 音视频参数见 screen/scrcpy_embed.py 的 SCRCPY_OPTIMIZED_ARGS）
+    # VAD 捕获设备：留空 = 自动（优先回环/混音输入设备，其次退回麦克风）。
+    #   选哪种看你机器的音频路由（详见 MODULES.md §4.5 VAD 音频源与 OBS 路由）：
+    #     · OBS 用户首选：Windows 启用「立体声混音」后留空即可
+    #       —— OBS「桌面音频」自动包含豆包、你也能正常听，零改动；
+    #     · 用 VB-Audio Virtual Cable：填 "CABLE Output"；
+    #     · 用 Voicemeeter：填 "VoiceMeeter Output"。
+    #   也可直接填设备【索引数字】(如 "3") 或设备名包含字(不区分大小写)。
+    #   不确定设备名？运行 `python -m src.audio.vad` 会列出全部输入设备与索引。
+    #   本机已装 VB-Audio Virtual Cable，且其「CABLE Output」是可捕获豆包声音的回环设备，故默认指向它。
+    #   （若改用 Voicemeeter，把值改成 "VoiceMeeter Output" 即可；留空仅在不支持立体声混音的旧机器上会退回麦克风）
+    "vad_input_device": "CABLE Output",
+    # VAD 静音跳句时序（单位：秒）—— 话术切换【完全由 VAD 静音时长决定】，不再使用 script_interval 倒计时：
+    #   · vad_silence_hold_sec  —— 豆包说完后，连续静音超过此值(默认 2.0s)即判定"说完了"，立即切入下一轮；
+    #   · vad_wait_start_sec    —— 【发消息后的思考等待上限】(默认 15.0s)：豆包生成/思考期可能数秒无语音，
+    #                               此值要足够大，避免"思考期"被误判为"播报结束"而切走；超时视作豆包无语音回答、直接进下一句；
+    #   · vad_speak_confirm_sec —— 进入"说话"态需连续有语音确认时长(默认 0.3s)：消抖，防单帧提示音/发送杂音误触发 SPEAKING；
+    #   · vad_max_speech_sec    —— 单句监听硬上限(默认 45.0s)，到时强制结束（防卡死）。
+    "vad_silence_hold_sec": 2.0,
+    "vad_wait_start_sec": 15.0,
+    "vad_speak_confirm_sec": 0.3,
+    "vad_max_speech_sec": 45.0,
+    # scrcpy 把手机音频送出的【电脑输出设备】。
+    # 作用：让 scrcpy 经 SDL2 的 SDL_AUDIO_DEVICE_NAME 把声音定向到虚拟音频线的「输入」端，
+    #       与上面 vad_input_device 的「输出」端成对，VAD 才能听到豆包发声。
+    #   · 用 VB-Audio Virtual Cable：填 "CABLE Input (VB-Audio Virtual Cable)"（与 vad 的 CABLE Output 成对）；
+    #   · 用 Voicemeeter：填 "VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)"（与 vad 的 VoiceMeeter Output 成对）；
+    #   · 留空 = scrcpy 走系统默认播放设备（此时需自己把 CABLE Input 设为默认播放设备才接得上）。
+    # 注意：SDL 对设备名大小写/空格敏感，填错会静默回退到默认设备；接不上就用 `python -m src.audio.vad` 核对设备全名。
+    "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)"
 }
 
 

@@ -13,6 +13,7 @@ from screen import capture
 from settings import auth
 from core.paths import ADBKEYBOARD_APK
 from device import doubao_check
+from audio.vad import AudioPlaybackMonitor
 
 
 def power_on_self_check():
@@ -55,6 +56,13 @@ def startup_readiness_check(log=True):
             ui.log_screen("【启动自检】发现问题：")
             for p in problems:
                 ui.log_screen("  " + p)
+    # VAD 引擎自检：开机即报告 pyaudio 是否可用 / 将选用哪个音频设备，
+    # 避免用户"完全看不到 VAD 日志"而不知 VAD 到底有没有在工作。
+    try:
+        ui.log_screen("【启动自检】VAD 语音检测引擎自检中...")
+        AudioPlaybackMonitor.quick_probe(log_fn=ui.log_screen)
+    except Exception as e:
+        ui.log_screen("【启动自检】VAD 自检异常：%s" % e)
     return ok, problems, mode
 
 
@@ -69,6 +77,13 @@ def toggle_power():
         problems = power_on_self_check()
         if problems:
             messagebox.showwarning("开机自检发现问题", "\n\n".join(problems))
+        # VAD 引擎探针（开机即报告 pyaudio 是否可用 / 将选用哪个音频设备）
+        # 日志已通过 ui.log_screen 回显到控制台，无需切换界面即可观察。
+        try:
+            ui.log_screen("【开机】VAD 语音检测引擎自检中...")
+            AudioPlaybackMonitor.quick_probe(log_fn=ui.log_screen)
+        except Exception as e:
+            ui.log_screen("【开机】VAD 自检异常：%s" % e)
         ui.btn_power.config(bg="#00aa44")
         winsound.Beep(1000, 120)
         ui.lab_sys_status.config(text="状态：待机【测试】✅", fg="#34d399")
