@@ -2,6 +2,7 @@
 # 所有控件作为模块级变量暴露（ui.root / ui.btn_power ...），供其他模块读写。
 # 按钮的 command 不在本文件内绑定（避免循环依赖），由 main.py 统一接线。
 import tkinter as tk
+import threading
 from tkinter import ttk, scrolledtext, messagebox, simpledialog
 from settings import config
 # ---- 控件引用（build_ui 中赋值）----
@@ -40,6 +41,13 @@ ent_r3max = None
 ent_cmd3 = None
 ent_interval = None
 
+# VAD 每秒会产生约 50 帧。工作线程只覆盖“最新一帧”，由 Tk 主线程定时
+# 取走并绘制，避免为每一帧创建一个 root.after 回调而挤爆事件队列。
+_volume_lock = threading.Lock()
+_volume_latest = None
+_volume_peak_db = -100.0
+_volume_poll_started = False
+
 
 def set_status(msg, color="#ff6b6b"):
     """线程安全地更新主界面状态栏；GUI 未就绪时退化为 print。"""
@@ -66,48 +74,87 @@ def log_screen(msg):
         pass  # 控制台已回显，GUI 未就绪时无需再打
 
 
-def set_volume_meter(db, avg=None, speaking=False, silence_elapsed=None, silence_hold=None):
-    """线程安全：根据实时分贝刷新音量指示条。
-    db            —— 当前帧分贝(dBFS，约 -60~0)
-    speaking      —— 是否正在说话(均值>阈值)
-    silence_elapsed/silence_hold —— 静音已持续/需持续秒数(用于显示'X/Ys 跳下一句')
-    条宽随音量大小变化、说话时绿色闪动；GUI 未就绪时静默跳过。"""
+def set_volume_meter(db, avg=None, speaking=False, silence_elapsed=None, silence_hold=None, phase="monitor"):
+    """保存最新 VAD 帧；实际绘制由 Tk 主线程以 20 FPS 合并刷新。"""
+    global _volume_latest
     try:
-        # dB 映射到 0~1：约 -60dB→0， -10dB→1
-        level = max(0.0, min(1.0, (float(db) + 60.0) / 50.0))
-        w = int(240 * level)
+        payload = {
+            "db": float(db),
+            "avg": float(avg) if avg is not None else float(db),
+            "speaking": bool(speaking),
+            "silence_elapsed": silence_elapsed,
+            "silence_hold": silence_hold,
+            "phase": phase,
+        }
+        with _volume_lock:
+            _volume_latest = payload
+    except (TypeError, ValueError):
+        return
 
-        def _do():
+
+def _poll_volume_meter():
+    """仅在 Tk 主线程运行：合并 VAD 帧，并用峰值缓降让短语音清晰可见。"""
+    global _volume_latest, _volume_peak_db
+    try:
+        with _volume_lock:
+            payload = _volume_latest
+            _volume_latest = None
+
+        if payload == "reset":
+            _volume_peak_db = -100.0
             volume_canvas.delete("all")
-            if speaking:
-                # 说话中：绿色，亮度随音量(闪动感)
-                fill = "#10b981" if level > 0.45 else "#34d399"
+            lab_vad_state.config(text="🔇 待机", fg="#9ca3af")
+        elif payload:
+            db = payload["db"]
+            avg = payload["avg"]
+            # 原始帧在手机音频分包间隙经常恰好为 -100dB；VAD 判定依据是平滑值。
+            # 条形图取两者较大值，并以每帧 3dB 缓降，避免有效峰值一闪而过。
+            target_db = max(db, avg)
+            if target_db >= _volume_peak_db:
+                _volume_peak_db = target_db
+            else:
+                _volume_peak_db = max(target_db, _volume_peak_db - 3.0)
+            shown_db = max(avg, _volume_peak_db)
+            level = max(0.0, min(1.0, (shown_db + 70.0) / 60.0))
+            w = int(240 * level)
+
+            volume_canvas.delete("all")
+            if payload["phase"] == "calibrating":
+                volume_canvas.create_rectangle(0, 0, w, 16, fill="#a78bfa", outline="")
+                lab_vad_state.config(text="🎚 校准底噪 (%.0fdB)" % shown_db, fg="#a78bfa")
+            elif payload["phase"] == "speaking":
+                if payload["speaking"]:
+                    fill = "#10b981" if level > 0.45 else "#34d399"
+                    volume_canvas.create_rectangle(0, 0, w, 16, fill=fill, outline="")
+                    lab_vad_state.config(text="🔊 说话中 (%.0fdB)" % shown_db, fg="#34d399")
+                elif payload["silence_elapsed"] is not None and payload["silence_hold"] is not None:
+                    volume_canvas.create_rectangle(0, 0, w, 16, fill="#fbbf24", outline="")
+                    lab_vad_state.config(
+                        text="🔇 静音 %.1f/%.1fs｜满跳下一句"
+                        % (payload["silence_elapsed"], payload["silence_hold"]),
+                        fg="#fbbf24",
+                    )
+                else:
+                    volume_canvas.create_rectangle(0, 0, w, 16, fill="#374151", outline="")
+                    lab_vad_state.config(text="🔇 监听中…", fg="#9ca3af")
+            else:
+                fill = "#22d3ee" if level > 0.25 else "#0e7490"
                 volume_canvas.create_rectangle(0, 0, w, 16, fill=fill, outline="")
-            else:
-                volume_canvas.create_rectangle(0, 0, w, 16, fill="#374151", outline="")
-            # 状态文字
-            if speaking:
-                lab_vad_state.config(text="🔊 说话中 (%.0fdB)" % db, fg="#34d399")
-            elif silence_elapsed is not None and silence_hold is not None:
-                lab_vad_state.config(text="🔇 静音 %.1f/%.1fs｜满跳下一句" % (silence_elapsed, silence_hold),
-                                     fg="#fbbf24")
-            else:
-                lab_vad_state.config(text="🔇 监听中…", fg="#9ca3af")
-
-        root.after(0, _do)
-    except Exception:
-        pass
-
+                lab_vad_state.config(text="🔍 监听中 (%.0fdB)｜等豆包开口" % shown_db, fg="#22d3ee")
+    except (tk.TclError, AttributeError) as exc:
+        print("[Client-VAD] 音量表刷新失败:", exc)
+    finally:
+        try:
+            if root and root.winfo_exists():
+                root.after(50, _poll_volume_meter)
+        except tk.TclError:
+            pass
 
 def reset_volume_meter():
     """把音量指示条复位到空闲态。"""
-    try:
-        def _do():
-            volume_canvas.delete("all")
-            lab_vad_state.config(text="🔇 待机", fg="#9ca3af")
-        root.after(0, _do)
-    except Exception:
-        pass
+    global _volume_latest
+    with _volume_lock:
+        _volume_latest = "reset"
 
 
 def build_ui():
@@ -116,7 +163,7 @@ def build_ui():
     global embed_container, txt_danmu, txt_screen_log, txt_pre_meet
     global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_audio_mode, btn_cap
     global btn_pwd, btn_auth, btn_save
-    global volume_canvas, lab_vad_state
+    global volume_canvas, lab_vad_state, _volume_poll_started
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
 
@@ -228,6 +275,9 @@ def build_ui():
     lab_vad_state = tk.Label(vol_frame, text="🔇 待机", bg="#111827", fg="#9ca3af",
                              font=("微软雅黑", 9), width=26, anchor="w")
     lab_vad_state.pack(side=tk.LEFT, padx=4)
+    if not _volume_poll_started:
+        _volume_poll_started = True
+        root.after(50, _poll_volume_meter)
 
     bottom_container = tk.Frame(ui_right, bg="#111827")
     bottom_container.pack(fill=tk.BOTH, expand=True)

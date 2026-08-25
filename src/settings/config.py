@@ -45,6 +45,13 @@ DEFAULT_CFG = {
     "vad_wait_start_sec": 15.0,
     "vad_speak_confirm_sec": 0.3,
     "vad_max_speech_sec": 45.0,
+    # 能量判定参数。实际开始阈值会取“此下限”和“静音底噪+余量”中的较高值；
+    # 结束阈值会再降低 hysteresis，避免临界音量来回抖动。
+    "vad_energy_threshold_db": -42.0,
+    "vad_noise_margin_db": 6.0,
+    "vad_end_hysteresis_db": 3.0,
+    "vad_calibration_sec": 0.8,
+    "vad_calibration_wait_sec": 6.0,
     # scrcpy 把手机音频送出的【电脑输出设备】。
     # 作用：让 scrcpy 经 SDL2 的 SDL_AUDIO_DEVICE_NAME 把声音定向到虚拟音频线的「输入」端，
     #       与上面 vad_input_device 的「输出」端成对，VAD 才能听到豆包发声。
@@ -77,7 +84,10 @@ def save_config():
                     ent_r3min, ent_r3max, ent_cmd3, ent_interval)
     import tkinter.messagebox as messagebox
     try:
-        d = {
+        # 在现有配置上更新界面字段。不能重新创建只含界面字段的字典，否则用户手工
+        # 调好的 VAD 设备、阈值和 scrcpy 音频路由会在点击“保存”后被静默删除。
+        d = load_config()
+        d.update({
             "product_name": ent_prod_name.get().strip(),
             "product_desc": ent_prod_desc.get().strip(),
             "pre_meet_text": txt_pre_meet.get(1.0, tk.END).strip(),
@@ -85,7 +95,7 @@ def save_config():
             "r2_min": ent_r2min.get(), "r2_max": ent_r2max.get(), "cmd2": ent_cmd2.get(),
             "r3_min": ent_r3min.get(), "r3_max": ent_r3max.get(), "cmd3": ent_cmd3.get(),
             "script_interval": ent_interval.get()
-        }
+        })
         with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         messagebox.showinfo("成功", "✅配置保存完成")

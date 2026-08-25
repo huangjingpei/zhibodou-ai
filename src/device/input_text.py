@@ -50,22 +50,16 @@ def _is_agent_alive(port: int = 12051) -> bool:
 def _send_via_agent(text: str, port: int = 12051, click_send: bool = True) -> bool:
     """通过无障碍 Agent 内存直注文字与点击"""
     try:
-        # 1. 内存级设置文本
+        # 手机端当前返回 {"code": 0, "message": "ok"}，旧客户端只认
+        # {"success": true}，会误判失败并重复走 ADB 兜底。
         enc = urllib.parse.quote(text)
-        url_text = f"http://127.0.0.1:{port}/set_text?text={enc}"
+        action = "inject_and_send" if click_send else "set_text"
+        url_text = f"http://127.0.0.1:{port}/{action}?text={enc}"
         with urllib.request.urlopen(url_text, timeout=1.5) as r1:
             data = json.loads(r1.read().decode("utf-8"))
-            if not data.get("success", False):
+            success = data.get("success") is True or data.get("code") == 0
+            if not success:
                 return False
-
-        # 2. 点击发送
-        if click_send:
-            time.sleep(0.1)
-            url_click = f"http://127.0.0.1:{port}/click?text={urllib.parse.quote('发送')}"
-            try:
-                urllib.request.urlopen(url_click, timeout=1.5)
-            except Exception:
-                pass
         return True
     except Exception as e:
         print(f"[input_text] Agent 注入异常: {e}")

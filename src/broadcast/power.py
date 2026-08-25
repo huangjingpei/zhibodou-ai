@@ -91,9 +91,21 @@ def toggle_power():
         ui.btn_live_start.config(state=tk.NORMAL)
         ui.btn_audio_mode.config(state=tk.NORMAL)
         ui.btn_cap.config(state=tk.NORMAL)
-        scrcpy_embed.start_scrcpy_embed()
-        threading.Thread(target=scrcpy_embed.lock_scrcpy_loop, daemon=True).start()
+        scrcpy_ok = scrcpy_embed.start_scrcpy_embed()
+        if scrcpy_ok:
+            threading.Thread(target=scrcpy_embed.lock_scrcpy_loop, daemon=True).start()
+        else:
+            ui.btn_meet.config(state=tk.DISABLED)
+            ui.btn_live_start.config(state=tk.DISABLED)
+            ui.set_status("状态：❌scrcpy 音频路由未就绪", "#ff6b6b")
     else:
+        # 先取消正在阻塞读取的 VAD，防止关机后旧线程继续放行下一句。
+        try:
+            from broadcast import live
+            live.cancel_active_vad()
+            state.is_broadcasting = False
+        except Exception:
+            pass
         state.system_power = False
         state.live_running = False
         state.screenshot_working = False

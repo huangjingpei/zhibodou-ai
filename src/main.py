@@ -10,6 +10,11 @@ from gui import dialogs
 
 def on_closing():
     try:
+        live.cancel_active_vad()
+        state.is_broadcasting = False
+    except Exception:
+        pass
+    try:
         scrcpy_embed.stop_scrcpy_embed()
     except Exception:
         pass

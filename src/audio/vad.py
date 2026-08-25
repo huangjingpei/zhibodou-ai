@@ -1,392 +1,506 @@
-# ==============================================================================
-# src/audio/vad.py
-# 纯电脑客户端本地音频 VAD 监听引擎 (毫秒级 PCM 能量检测，零 ADB 依赖)
-#
-# 设计约定（与产品流程一致）：
-#   判断豆包有没有在说话 = 在【客户端】拿到豆包的声音流，做 VAD 检测。
-#     - 有声音 → 豆包在说话 → 不打断；
-#     - 静音持续超过 silence_hold_sec → 豆包说完了 → 继续下一个话术。
-#
-# 音频源说明（这是 VAD 能否生效的关键）：
-#   豆包在手机上发声，客户端要"收到它的流"通常有两种可靠方式：
-#     A. Windows 启用「立体声混音 / Stereo Mix / 监听」输入设备 —— 本机播放的
-#        声音(含 scrcpy 转发的手机音频)会被当成输入流捕获，最干净；
-#     B. 退而求其次用默认麦克风 —— 需让手机扬声器靠近电脑麦克风，受环境噪音影响。
-#   本模块优先找 A 类回环/混音设备，找不到再退回 B(麦克风)，并在日志里明确提示。
-# ==============================================================================
-import time
-import math
+"""客户端音频 VAD。
+
+必须先打开/校准音频，再向豆包发送话术。发送后持续经历
+WAITING_SPEECH -> SPEAKING -> ENDED，只有 SPEAKING 后的连续静音才放行下一句。
+"""
+from __future__ import annotations
+
 import array
+import math
+import os
+import sys
+import threading
+import time
+from collections import deque
+from typing import Callable, Optional, Tuple
+
+VAD_ENDED = "ended"
+VAD_START_TIMEOUT = "start_timeout"
+VAD_SPEECH_TIMEOUT = "speech_timeout"
+VAD_CANCELLED = "cancelled"
+VAD_UNAVAILABLE = "unavailable"
+VAD_AUDIO_ERROR = "audio_error"
 
 
 class AudioPlaybackMonitor:
-    """
-    【本地客户端语音活动检测器 (VAD)】
-    直接在电脑本地捕获音频输入流(回环混音/麦克风)，计算真实分贝值与语流状态，
-    彻底抛弃 slow ADB dumpsys audio。
-    """
+    """捕获 scrcpy 转发到电脑的音频并判断豆包语音是否结束。"""
 
-    # 回环/混音类输入设备的关键字（命中即优先选用，可捕获本机播放的声音）
-    _LOOPBACK_KEYWORDS = ("stereo mix", "wave out", "what u hear",
-                          "监听", "loopback", "mixing", "立体声混音")
+    _LOOPBACK_KEYWORDS = (
+        "stereo mix", "wave out", "what u hear", "监听", "loopback",
+        "mixing", "立体声混音", "cable output", "voicemeeter output",
+    )
 
-    def __init__(self, energy_threshold_db: float = -42.0,
-                 silence_hold_sec: float = 1.0, log_fn=print, on_level=None,
-                 speak_confirm_sec: float = 0.3):
-        self.energy_threshold_db = energy_threshold_db   # 静音判定阈值 (dB)
-        self.silence_hold_sec = silence_hold_sec         # 语毕静音维持时间 (秒)——即"静音超此值判播报结束"
-        self.speak_confirm_sec = speak_confirm_sec       # 进入"说话"态需连续有语音确认时长(消抖，防单帧提示音/杂音误触发)
-        self._log = log_fn                                # 日志回调(可传 ui.log_screen)
-        self._on_level = on_level                         # 实时音量回调(可传 ui.set_volume_meter)
+    def __init__(
+        self,
+        energy_threshold_db: float = -42.0,
+        silence_hold_sec: float = 2.0,
+        log_fn: Callable[[str], None] = print,
+        on_level=None,
+        speak_confirm_sec: float = 0.3,
+        noise_margin_db: float = 6.0,
+        end_hysteresis_db: float = 3.0,
+    ):
+        self.energy_threshold_db = float(energy_threshold_db)
+        self.silence_hold_sec = max(0.2, float(silence_hold_sec))
+        self.speak_confirm_sec = max(0.05, float(speak_confirm_sec))
+        self.noise_margin_db = max(3.0, float(noise_margin_db))
+        self.end_hysteresis_db = max(1.0, float(end_hysteresis_db))
+        self.start_threshold_db = self.energy_threshold_db
+        self.end_threshold_db = self.energy_threshold_db - self.end_hysteresis_db
+        self.idle_floor_db = -100.0
+        self._log = log_fn
+        self._on_level = on_level
         self._pa = None
         self._stream = None
         self._device_index = None
         self._device_name = "(未初始化)"
+        self._host_api_name = "?"
+        self._sample_rate = 0
+        self._frames_per_buffer = 1024
+        self._close_lock = threading.Lock()
+        self._clock = time.monotonic
         self._init_local_audio()
 
+    @staticmethod
+    def _load_config():
+        try:
+            src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if src_dir not in sys.path:
+                sys.path.insert(0, src_dir)
+            from settings import config
+            return config.load_config()
+        except Exception:
+            return {}
+
+    def _host_name(self, info) -> str:
+        try:
+            api = self._pa.get_host_api_info_by_index(int(info.get("hostApi", -1)))
+            return str(api.get("name") or "?")
+        except Exception:
+            return "?"
+
+    def _device_rank(self, info, default_index) -> tuple:
+        """同名设备优先 WASAPI，避免按名称长度碰运气。"""
+        host = self._host_name(info).lower()
+        index = int(info.get("index", 10**9))
+        if "wasapi" in host:
+            api_rank = 0
+        elif index == default_index:
+            api_rank = 1
+        elif "directsound" in host:
+            api_rank = 2
+        elif "mme" in host:
+            api_rank = 3
+        else:
+            api_rank = 4
+        return api_rank, -len(str(info.get("name") or "")), index
+
     def _init_local_audio(self):
-        """尝试初始化本地音频输入流。
-        优先选用回环/混音设备(可捕获本机播放的豆包声音)，否则退回默认麦克风。
-        可在 config.vad_input_device 中指定设备名包含字或索引，指向虚拟音频线。"""
         try:
             import pyaudio
             self._pa = pyaudio.PyAudio()
-            self._log("[Client-VAD] 引擎初始化：pyaudio 可用，正在枚举音频输入设备...")
-
-            # 用户显式指定捕获设备（如虚拟音频线 "CABLE Output"）：优先按名/索引匹配
-            dev_override = ""
-            _cfg = None
+            self._log("[Client-VAD] 正在枚举音频输入设备...")
+            override = str(self._load_config().get("vad_input_device") or "").strip()
             try:
-                # 保证 `src` 在 sys.path，使 `from settings import config` 在
-                # `python -m src.audio.vad` 与 `main.py` 两种启动方式下都能读到同一份配置
-                import os as _os, sys as _sys
-                _src_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-                if _src_dir not in _sys.path:
-                    _sys.path.insert(0, _src_dir)
-                from settings import config as _cfg
+                default_index = int(self._pa.get_default_input_device_info()["index"])
             except Exception:
-                _cfg = None
-            if _cfg is not None:
-                dev_override = (_cfg.load_config().get("vad_input_device") or "").strip()
+                default_index = None
 
-            default_in = None
-            loopback_idx = None
-            named_idx = None
-            named_matches = []   # 记录所有名字命中的设备，便于多虚拟线时提示精确索引
+            inputs = []
             for i in range(self._pa.get_device_count()):
                 try:
-                    info = self._pa.get_device_info_by_index(i)
+                    info = dict(self._pa.get_device_info_by_index(i))
                 except Exception:
                     continue
-                name = (info.get("name") or "").lower()
-                max_in = int(info.get("maxInputChannels", 0) or 0)
-                if max_in <= 0:
-                    continue
-                if default_in is None:
-                    default_in = i
+                if int(info.get("maxInputChannels", 0) or 0) > 0:
+                    info["index"] = i
+                    inputs.append(info)
+
+            exact = []
+            named = []
+            loopbacks = []
+            if override.isdigit():
+                exact = [d for d in inputs if int(d["index"]) == int(override)]
+            elif override:
+                named = [d for d in inputs if override.lower() in str(d.get("name") or "").lower()]
+            for info in inputs:
+                name = str(info.get("name") or "").lower()
                 if any(k in name for k in self._LOOPBACK_KEYWORDS):
-                    loopback_idx = i
-                # 显式指定：索引精确匹配 > 设备名包含字串(首个命中即停，避免多虚拟线歧义)
-                if dev_override:
-                    if dev_override.isdigit() and int(dev_override) == i:
-                        named_idx = i
-                    elif dev_override.lower() in name:
-                        if named_idx is None:
-                            named_idx = i
-                        named_matches.append(i)
+                    loopbacks.append(info)
 
-            # 选择优先级：显式指定 > 回环/混音 > 默认麦克风
-            if named_idx is not None:
-                self._device_index = named_idx
-            elif loopback_idx is not None:
-                self._device_index = loopback_idx
-            elif default_in is not None:
-                self._device_index = default_in
+            if exact:
+                preferred = exact
+            elif named:
+                preferred = sorted(named, key=lambda d: self._device_rank(d, default_index))
+            elif loopbacks:
+                preferred = sorted(loopbacks, key=lambda d: self._device_rank(d, default_index))
+            else:
+                preferred = sorted(inputs, key=lambda d: self._device_rank(d, default_index))
 
-            if self._device_index is not None:
-                info = self._pa.get_device_info_by_index(self._device_index)
-                self._device_name = info.get("name", "?")
-                rate = int(info.get("defaultSampleRate", 16000) or 16000)
-                self._stream = self._pa.open(
-                    format=pyaudio.paInt16,
-                    channels=1,
-                    rate=rate,
-                    input=True,
-                    input_device_index=self._device_index,
-                    frames_per_buffer=1024,
+            ordered = []
+            seen = set()
+            for info in preferred + sorted(inputs, key=lambda d: self._device_rank(d, default_index)):
+                if info["index"] not in seen:
+                    ordered.append(info)
+                    seen.add(info["index"])
+
+            errors = []
+            for info in ordered:
+                index = int(info["index"])
+                rate = int(info.get("defaultSampleRate", 48000) or 48000)
+                frames = max(256, int(rate * 0.02))
+                try:
+                    stream = self._pa.open(
+                        format=pyaudio.paInt16, channels=1, rate=rate, input=True,
+                        input_device_index=index, frames_per_buffer=frames,
+                    )
+                except Exception as exc:
+                    errors.append("%s=%s" % (index, exc))
+                    continue
+                self._stream = stream
+                self._device_index = index
+                self._device_name = str(info.get("name") or "?")
+                self._host_api_name = self._host_name(info)
+                self._sample_rate = rate
+                self._frames_per_buffer = frames
+                break
+
+            if not self._stream:
+                self._log("[Client-VAD] ❌ 没有可打开的音频输入设备：%s" % "; ".join(errors[-4:]))
+                self.close()
+                return
+            self._log(
+                "[Client-VAD] ✅ 输入设备 idx=%d｜%s｜Host=%s｜%dHz｜帧≈20ms"
+                % (self._device_index, self._device_name, self._host_api_name, self._sample_rate)
+            )
+            if len(named) > 1:
+                detail = "、".join(
+                    "%d=%s(%s)" % (d["index"], d.get("name"), self._host_name(d))
+                    for d in sorted(named, key=lambda d: self._device_rank(d, default_index))
                 )
-                self._log("[Client-VAD] 已打开音频输入设备[%s] idx=%s rate=%d"
-                          % (self._device_name, self._device_index, rate))
-                self._log("[Client-VAD] ✅ 已旁听输入设备【%s】：豆包经 scrcpy→CABLE Input→"
-                          "CABLE Output 的语音流将在此被检测（只读旁听，不改原始音频）"
-                          % self._device_name)
-                if named_idx is not None:
-                    self._log("[Client-VAD] 使用显式指定设备(可配合虚拟音频线做纯数字分流，避免回环抢音频图)。")
-                    if len(named_matches) > 1:
-                        _detail = "、".join(
-                            "%d=%r" % (mi, self._pa.get_device_info_by_index(mi).get("name"))
-                            for mi in named_matches)
-                        self._log("[Client-VAD] ⚠ 设备名「%s」命中了多个输入设备：%s；已取首个(%d)。"
-                                  "注：idx=36 是「VB-Audio Point」(配对不同，勿用)；若 VAD 听不到豆包，"
-                                  "请把 vad_input_device 改成精确索引(如 \"9\" 或 \"21\"，均为标准 Virtual Cable)以锁定。"
-                                  "（部分设备名被 Windows 截断，以索引为准）"
-                                  % (dev_override, _detail, named_matches[0]))
-                elif loopback_idx is None:
-                    self._log("[Client-VAD] ⚠ 未找到立体声混音/回环设备，当前用【麦克风】。"
-                              "若豆包声音没被捕获：请在 Windows 声音设置里启用「立体声混音」，"
-                              "或让手机扬声器靠近电脑麦克风；也可配合 scrcpy 音频转发使用回环捕获。")
-            else:
-                self._stream = None
-                self._log("[Client-VAD] ⚠ 未找到任何音频输入设备，VAD 将旁路。")
-        except Exception as e:
-            self._stream = None
-            self._pa = None
-            self._log("[Client-VAD] ⚠ 初始化音频失败：%s（多半是没装 pyaudio，"
-                      "请 pip install pyaudio 并确认麦克风/混音设备可用）" % e)
+                self._log("[Client-VAD] 同名候选：%s；已按 WASAPI/默认端点优先级选择。" % detail)
+        except Exception as exc:
+            self._log("[Client-VAD] ❌ 音频初始化失败：%s" % exc)
+            self.close()
 
-    @classmethod
-    def quick_probe(cls, log_fn=print):
-        """开机自检用：枚举所有输入设备 + 打印将选用的设备，用完即释放。"""
-        list_audio_input_devices(log_fn)
+    @property
+    def is_ready(self) -> bool:
+        return self._stream is not None
+
+    def _read_rms_db(self) -> Tuple[float, bool]:
+        stream = self._stream
+        if stream is None:
+            return -100.0, False
         try:
-            mon = cls(log_fn=log_fn)
-            if mon._stream is None:
-                log_fn("[Client-VAD] 自检结果：⚠ 未就绪（pyaudio 未装 或 无音频输入设备），"
-                       "直播时 VAD 将旁路为固定等待。")
-            else:
-                log_fn("[Client-VAD] 自检结果：✅ 已就绪，将使用设备 [%s]，"
-                       "直播时会实时监听豆包语流。" % mon._device_name)
-            mon.close()
-        except Exception as e:
-            log_fn("[Client-VAD] 自检异常：%s" % e)
+            data = stream.read(self._frames_per_buffer, exception_on_overflow=False)
+            samples = array.array("h", data)
+            if not samples:
+                return -100.0, False
+            rms = math.sqrt(sum(s * s for s in samples) / len(samples))
+            if rms <= 0:
+                return -100.0, True
+            return 20.0 * math.log10(rms / 32768.0), True
+        except Exception:
+            return -100.0, False
 
     def get_current_rms_db(self) -> float:
-        """读取本地当前一帧音频的分贝能量值 (dBFS)。失败/无流返回 -100。"""
-        if self._stream:
-            try:
-                data = self._stream.read(1024, exception_on_overflow=False)
-                shorts = array.array('h', data)
-                if not shorts:
-                    return -100.0
-                sum_squares = sum(s * s for s in shorts)
-                rms = math.sqrt(sum_squares / len(shorts))
-                if rms <= 0:
-                    return -100.0
-                return 20 * math.log10(rms / 32768.0)
-            except Exception:
-                return -100.0
-        return -100.0
+        """兼容诊断调用；状态机内部会额外检查读取是否成功。"""
+        return self._read_rms_db()[0]
+
+    @staticmethod
+    def _percentile(values, ratio: float) -> float:
+        if not values:
+            return -100.0
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, max(0, int((len(ordered) - 1) * ratio)))
+        return ordered[index]
+
+    @staticmethod
+    def _average_db(levels) -> float:
+        """在线性能量域平均，避免直接对 dB 做算术平均。"""
+        if not levels:
+            return -100.0
+        power = sum(10.0 ** (db / 10.0) for db in levels) / len(levels)
+        return -100.0 if power <= 1e-10 else 10.0 * math.log10(power)
+
+    def calibrate_idle(
+        self,
+        sec: float = 0.8,
+        stop_event: Optional[threading.Event] = None,
+        max_wait_sec: float = 6.0,
+    ) -> bool:
+        """在发送前等待一个完整静音窗口并测量底噪。"""
+        if not self._stream:
+            return False
+        window_sec = max(0.3, float(sec))
+        deadline = self._clock() + max(window_sec, float(max_wait_sec))
+        failures = 0
+        while self._clock() < deadline:
+            levels = []
+            window_end = self._clock() + window_sec
+            while self._clock() < window_end:
+                if stop_event and stop_event.is_set():
+                    return False
+                db, ok = self._read_rms_db()
+                if ok:
+                    levels.append(db)
+                    failures = 0
+                    self._emit_level(
+                        db,
+                        self._average_db(levels[-5:]),
+                        False,
+                        None,
+                        phase="calibrating",
+                    )
+                else:
+                    failures += 1
+                    if failures >= 5:
+                        self._log("[Client-VAD] ❌ 校准时连续读取音频失败。")
+                        return False
+            if not levels:
+                continue
+            self.idle_floor_db = self._percentile(levels, 0.9)
+            self.start_threshold_db = max(
+                self.energy_threshold_db, self.idle_floor_db + self.noise_margin_db
+            )
+            self.end_threshold_db = self.start_threshold_db - self.end_hysteresis_db
+            if self.idle_floor_db <= -25.0 and self.start_threshold_db <= -12.0:
+                self._log(
+                    "[Client-VAD] 校准完成：底噪=%.1fdB｜开口阈值=%.1fdB｜结束阈值=%.1fdB"
+                    % (self.idle_floor_db, self.start_threshold_db, self.end_threshold_db)
+                )
+                return True
+            if self._clock() < deadline:
+                self._log(
+                    "[Client-VAD] 当前仍有音频(%.1fdB)，等待豆包安静后再发送..."
+                    % self.idle_floor_db
+                )
+        self._log(
+            "[Client-VAD] ❌ %.1fs 内没有找到干净静音窗口（最后基线 %.1fdB）。"
+            "请检查 CABLE/VoiceMeeter 回环或常驻音源。"
+            % (max_wait_sec, self.idle_floor_db)
+        )
+        return False
 
     def close(self):
-        """释放声卡资源（每轮必须调用，否则设备会泄漏导致后续轮次 VAD 失效）。"""
-        try:
-            if self._stream:
-                self._stream.stop_stream()
-                self._stream.close()
-            if self._pa:
-                self._pa.terminate()
-        except Exception:
-            pass
-        finally:
+        with self._close_lock:
+            stream, pa = self._stream, self._pa
             self._stream = None
             self._pa = None
-
-    def _emit_level(self, db, avg, speaking, silence_elapsed, silence_hold):
-        """把实时音量/说话状态推给 UI 回调（每帧调用，驱动音量指示条）。"""
-        if self._on_level:
             try:
-                self._on_level(db, avg, speaking, silence_elapsed, silence_hold)
+                if stream:
+                    stream.stop_stream()
+                    stream.close()
+            except Exception:
+                pass
+            try:
+                if pa:
+                    pa.terminate()
             except Exception:
                 pass
 
-    def wait_for_doubao_speech_cycle(self, max_wait_start_sec: float = 6.0,
-                                     max_speech_timeout_sec: float = 60.0) -> bool:
-        """
-        【本地 VAD 完整状态机】(修复"豆包思考期被误判播报结束"问题)
-
-        ★ 设计核心（务必照此理解，勿理解为"固定检测 2 秒"）：
-          - VAD 检测是【持续】的：整个轮次每 ~50ms 读一帧算 dB，从发消息到播报结束从不中断；
-          - 2s(silence_hold_sec) 不是"检测窗口"，而是【SPEAKING 态下"连续静音"的维持阈值】；
-          - 切话术完全由【VAD 检测结果的状态变化】驱动：
-                有语音(均值>阈值) → 进入/保持 SPEAKING；
-                连续无语音(均值≤阈值)累计满 2s → 状态变化到 ENDED → 切入下一轮。
-          即：检测一直在，控制只看"说话态↔静音态"的跳变，不是数到 2 秒就判定。
-
-        状态：WAITING_SPEECH(发消息后等豆包开口/思考) → SPEAKING(检测到真实语音) → ENDED(静音超阈值)
-        约定：客户端给豆包发消息瞬间默认无语音。WAITING 期间静音属正常、绝不切句；
-             仅 SPEAKING 状态下连续静音超 silence_hold_sec 才判"播报结束"切入下一轮。
-             进入 SPEAKING 需连续 speak_confirm_sec 有语音(消抖)，防单帧提示音/杂音误触发。
-        返回 True=本轮结束(可继续下一轮)；False=思考超时(豆包无语音回答，直接进下一句)。
-        """
-        self._log("[Client-VAD] 启动监听：阈值=%.1fdB 静音维持=%.1fs 设备=%s"
-                  % (self.energy_threshold_db, self.silence_hold_sec, self._device_name))
+    def _emit_level(self, db, avg, speaking, silence_elapsed, phase="waiting"):
+        if not self._on_level:
+            return
         try:
-            # 没打开到任何音频设备：VAD 无法工作，明确告警并旁路，避免"假生效"
+            self._on_level(db, avg, speaking, silence_elapsed, self.silence_hold_sec, phase)
+        except Exception:
+            pass
+
+    def wait_for_doubao_speech_cycle(
+        self,
+        max_wait_start_sec: float = 15.0,
+        max_speech_timeout_sec: float = 45.0,
+        stop_event: Optional[threading.Event] = None,
+        close_on_finish: bool = True,
+    ) -> str:
+        """持续等待一次完整的“开口 -> 说话 -> 静音结束”周期。"""
+        self._log(
+            "[Client-VAD] 启动状态机：开口阈值=%.1fdB｜结束阈值=%.1fdB｜静音维持=%.1fs"
+            % (self.start_threshold_db, self.end_threshold_db, self.silence_hold_sec)
+        )
+        try:
             if not self._stream:
-                self._log("[Client-VAD] ⚠ VAD 已旁路(无音频设备/未装pyaudio)："
-                          "本轮仅固定等待 4s 后继续，不会真正检测豆包是否说完！")
-                time.sleep(4.0)
-                return True
-
-            recent = []          # 近期 dB 滑动窗口(用于平滑，避免单帧抖动误判)
-            last_log_t = 0.0
-
-            # ===== 完整状态机：发消息 → WAITING(等语音) → SPEAKING(有语音) → ENDED(静音超阈值) =====
-            # 核心约定：客户端给豆包发消息的瞬间【默认无语音】。
-            #   WAITING 状态：豆包在"思考/生成"，此期间静音属【正常】，绝不触发切句；
-            #            只等待"真实语音出现"，或等待思考超时(视作豆包无语音回答)。
-            #   SPEAKING 状态：仅在此状态下，连续静音超 silence_hold_sec 才判"播报结束"，切下一句。
-            #   这样可避免：豆包还在思考(数秒无语音)就被误判"播报结束"而切走；也避免单帧提示音/杂音误入 SPEAKING。
-            state = "WAITING_SPEECH"
-            start_wait = time.time()
-            speech_started = False
-            confirm_frames = 0
-            confirm_need = max(1, int(round(self.speak_confirm_sec / 0.05)))  # 需连续多少帧(0.05s/帧)确认真实语音
-            recent = []
-            last_log_t = 0.0
-            self._log("[Client-VAD] 状态[WAITING]：已发消息，等待豆包开口(思考期无语音属正常；最多等 %.1fs)"
-                      % max_wait_start_sec)
-            while time.time() - start_wait < max_wait_start_sec:
-                db = self.get_current_rms_db()
+                self._log("[Client-VAD] ❌ 没有音频流，停止自动轮播。")
+                return VAD_UNAVAILABLE
+            recent = deque(maxlen=5)
+            consecutive_failures = 0
+            last_log = 0.0
+            sample_rate = float(self._sample_rate or 48000)
+            frame_sec = max(0.005, self._frames_per_buffer / sample_rate)
+            confirm_window_sec = max(1.0, self.speak_confirm_sec * 4.0)
+            voice_window = deque(maxlen=max(10, int(confirm_window_sec / frame_sec)))
+            # 手机/虚拟声卡的 PCM 常按块到达，块之间会出现 -100dB 空帧。
+            # 在滚动窗口内累计有效语音，不能要求每一帧连续越阈值。
+            required_voiced_sec = max(0.06, min(self.speak_confirm_sec, 0.15))
+            wait_started = self._clock()
+            self._log("[Client-VAD] 状态[WAITING]：等待豆包开口，思考期静音不会切句。")
+            while self._clock() - wait_started < max_wait_start_sec:
+                if stop_event and stop_event.is_set():
+                    return VAD_CANCELLED
+                db, ok = self._read_rms_db()
+                if not ok:
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        self._log("[Client-VAD] ❌ 连续读取音频失败，停止本轮。")
+                        return VAD_AUDIO_ERROR
+                    continue
+                consecutive_failures = 0
                 recent.append(db)
-                recent = recent[-8:]
-                avg = sum(recent) / len(recent)
-                now = time.time()
-                # 注意：检测是持续运行的，这里把"真实是否过阈值"反映给音量条，
-                # 让 WAITING 期也能看到豆包一开口音量条立刻变绿（体现"检测一直在"）。
-                # 但【状态切换】仍走下方 confirm_frames 消抖逻辑，音量条显示与控制解耦。
-                speaking_now = avg > self.energy_threshold_db
-                self._emit_level(db, avg, speaking_now, None, self.silence_hold_sec)
-                if now - last_log_t >= 0.5:
-                    self._log("[Client-VAD]   [WAITING] 思考中 dB=%.1f 均值=%.1f (无语音属正常，继续等)"
-                              % (db, avg))
-                    last_log_t = now
-                if avg > self.energy_threshold_db:
-                    confirm_frames += 1
-                    if confirm_frames >= confirm_need:
-                        speech_started = True
-                        self._log("[Client-VAD] ✅ 状态[→SPEAKING]：检测到真实语音(均值%.1f>阈值%.1f，连续%.2fs)："
-                                  "豆包开始播报，音频流从 CABLE Input→CABLE Output 接通"
-                                  % (avg, self.energy_threshold_db, self.speak_confirm_sec))
-                        break
-                else:
-                    confirm_frames = 0
-                time.sleep(0.05)
+                avg = self._average_db(recent)
+                now = self._clock()
+                speaking_now = db > self.start_threshold_db or avg > self.start_threshold_db
+                voice_window.append(speaking_now)
+                self._emit_level(db, avg, speaking_now, None, phase="waiting")
+                if now - last_log >= 0.75:
+                    self._log("[Client-VAD] [WAITING] 当前=%.1f｜平滑=%.1fdB" % (db, avg))
+                    last_log = now
+                voiced_sec = sum(voice_window) * frame_sec
+                if voiced_sec >= required_voiced_sec:
+                    self._log(
+                        "[Client-VAD] ✅ 状态[→SPEAKING]：%.1fs 窗口累计 %.2fs 有效语音。"
+                        % (confirm_window_sec, voiced_sec)
+                    )
+                    break
+            else:
+                self._log(
+                    "[Client-VAD] ⚠ %.1fs 内未检测到豆包开口，按无语音回答结束本轮。"
+                    % max_wait_start_sec
+                )
+                return VAD_START_TIMEOUT
 
-            if not speech_started:
-                self._log("[Client-VAD] ⚠ 等待开口超时：%.1fs 内豆包未发声(可能文字回答/无语音)。"
-                          "视作本轮无播报，直接进下一句。" % max_wait_start_sec)
-                return False
-
-            # ---- 状态 SPEAKING：监听语流，仅此状态静音超阈值才判结束 ----
-            state = "SPEAKING"
-            speech_start_time = time.time()
-            silence_start = None
-            recent = []
-            self._log("[Client-VAD] 状态[SPEAKING]：监听语流，等豆包说完(静音超 %.1fs 即判播报结束)"
-                      % self.silence_hold_sec)
-            while time.time() - speech_start_time < max_speech_timeout_sec:
-                db = self.get_current_rms_db()
+            speech_started = self._clock()
+            silence_started = None
+            recent.clear()
+            last_log = 0.0
+            self._log("[Client-VAD] 状态[SPEAKING]：持续监听，短停顿不会切句。")
+            while self._clock() - speech_started < max_speech_timeout_sec:
+                if stop_event and stop_event.is_set():
+                    return VAD_CANCELLED
+                db, ok = self._read_rms_db()
+                if not ok:
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        self._log("[Client-VAD] ❌ 语音期间音频流中断，停止本轮。")
+                        return VAD_AUDIO_ERROR
+                    continue
+                consecutive_failures = 0
                 recent.append(db)
-                recent = recent[-8:]
-                avg = sum(recent) / len(recent)
-                now = time.time()
-                speaking = avg > self.energy_threshold_db
-                sil_el = (now - silence_start) if (not speaking and silence_start is not None) else None
-                self._emit_level(db, avg, speaking, sil_el, self.silence_hold_sec)
-                if now - last_log_t >= 0.5:
-                    state_txt = "说话中" if avg > self.energy_threshold_db else "静音(等结束)"
-                    self._log("[Client-VAD]   [SPEAKING] dB=%.1f 均值=%.1f 状态=%s"
-                              % (db, avg, state_txt))
-                    last_log_t = now
-
-                if avg <= self.energy_threshold_db:
-                    if silence_start is None:
-                        silence_start = now
-                        self._log("[Client-VAD] 状态[SPEAKING]：进入静音，开始计时静音维持(%.1fs)"
-                                  % self.silence_hold_sec)
-                    elif now - silence_start >= self.silence_hold_sec:
-                        dur = round(now - speech_start_time, 2)
-                        self._log("[Client-VAD] ✅ 状态[→ENDED]：语流结束！本次播报时长 %.2fs，立即切入下一轮"
-                                  % dur)
-                        return True
-                else:
-                    if silence_start is not None:
-                        self._log("[Client-VAD] 静音被打断，恢复语流，继续监听")
-                    silence_start = None
-                time.sleep(0.05)
-
-            dur = round(time.time() - speech_start_time, 2)
-            self._log("[Client-VAD] ⚠ 达到最大监听时长 %.1fs(本轮强制结束)，继续下一轮"
-                      % max_speech_timeout_sec)
-            return True
+                avg = self._average_db(recent)
+                now = self._clock()
+                # 分包音频恢复时，首个有效原始帧可能已越阈值，但 5 帧平滑值仍被
+                # 前面的 -100dB 空帧拉低。两者任一越阈值都必须取消静音计时，
+                # 否则会在豆包刚恢复出声的同一帧误判 ENDED。
+                speaking_now = db > self.end_threshold_db or avg > self.end_threshold_db
+                silence_elapsed = None if silence_started is None else now - silence_started
+                self._emit_level(db, avg, speaking_now, silence_elapsed, phase="speaking")
+                if now - last_log >= 0.75:
+                    state = "说话中" if speaking_now else "静音计时"
+                    self._log("[Client-VAD] [SPEAKING] %.1f/%.1fdB｜%s" % (db, avg, state))
+                    last_log = now
+                if speaking_now:
+                    if silence_started is not None:
+                        self._log("[Client-VAD] 静音被语音打断，继续监听。")
+                    silence_started = None
+                elif silence_started is None:
+                    silence_started = now
+                    self._log("[Client-VAD] 进入静音，开始 %.1fs 结束确认。" % self.silence_hold_sec)
+                elif now - silence_started >= self.silence_hold_sec:
+                    self._log(
+                        "[Client-VAD] ✅ 状态[→ENDED]：连续静音 %.1fs，放行下一句。"
+                        % (now - silence_started)
+                    )
+                    return VAD_ENDED
+            self._log(
+                "[Client-VAD] ⚠ 单句超过 %.1fs 硬上限，强制结束本轮。"
+                % max_speech_timeout_sec
+            )
+            return VAD_SPEECH_TIMEOUT
         finally:
-            # 关键修复：每轮必须释放音频设备，否则几轮后设备被占满、VAD 静默失效
-            self.close()
+            if close_on_finish:
+                self.close()
+
+    @classmethod
+    def quick_probe(cls, log_fn=print):
+        list_audio_input_devices(log_fn)
+        mon = cls(log_fn=log_fn)
+        try:
+            if mon.is_ready:
+                log_fn(
+                    "[Client-VAD] 自检就绪：idx=%s，%s (%s)"
+                    % (mon._device_index, mon._device_name, mon._host_api_name)
+                )
+            else:
+                log_fn("[Client-VAD] 自检失败：没有可用音频输入流。")
+        finally:
+            mon.close()
+
+
+def list_audio_input_devices(log_fn=print):
+    """列出 PortAudio 输入端点和 Host API，便于锁定 WASAPI 索引。"""
+    try:
+        import pyaudio
+        pa = pyaudio.PyAudio()
+    except Exception as exc:
+        log_fn("[Client-VAD] 无法枚举设备：%s" % exc)
+        return []
+    found = []
+    try:
+        try:
+            default_index = int(pa.get_default_input_device_info()["index"])
+        except Exception:
+            default_index = None
+        log_fn("[Client-VAD] 音频输入设备：")
+        for i in range(pa.get_device_count()):
+            try:
+                info = pa.get_device_info_by_index(i)
+                if int(info.get("maxInputChannels", 0) or 0) <= 0:
+                    continue
+                api = pa.get_host_api_info_by_index(int(info.get("hostApi", -1)))
+                host = str(api.get("name") or "?")
+                name = str(info.get("name") or "?")
+                tags = []
+                if i == default_index:
+                    tags.append("默认")
+                if "wasapi" in host.lower():
+                    tags.append("推荐")
+                tag = " [%s]" % "/".join(tags) if tags else ""
+                log_fn("  [%d] %s｜%s｜%dHz%s" % (
+                    i, name, host, int(info.get("defaultSampleRate", 0)), tag
+                ))
+                found.append({"index": i, "name": name, "host_api": host})
+            except Exception:
+                continue
+    finally:
+        pa.terminate()
+    return found
 
 
 def run_live_listen_test(duration_sec: float = 6.0, log_fn=print):
-    """诊断用：实时旁听当前 vad_input_device 的 dB，验证'声音是否真的到达 VAD'。
-    无需豆包/开播——只要往 CABLE Input 放任意声音(如播段音乐、或开播让豆包说话)，
-    这里 dB 明显上升(超过阈值)即证明 scrcpy→CABLE→VAD 链路接通。"""
-    log_fn("[Client-VAD] ▶ 实时旁听测试 %.1fs：请此刻往 CABLE Input 播放声音"
-          "(或开播让豆包说话)…" % duration_sec)
     mon = AudioPlaybackMonitor(log_fn=log_fn)
-    if mon._stream is None:
-        log_fn("[Client-VAD] ⚠ 无音频设备，无法测试。")
-        return
     try:
-        start = time.time()
+        if not mon.is_ready:
+            return False
+        log_fn("[Client-VAD] 先保持静音，校准 0.8 秒...")
+        if not mon.calibrate_idle(0.8):
+            return False
+        log_fn("[Client-VAD] 请让豆包播放语音，监听 %.1f 秒..." % duration_sec)
+        end = time.monotonic() + duration_sec
         peak = -100.0
-        while time.time() - start < duration_sec:
-            db = mon.get_current_rms_db()
+        while time.monotonic() < end:
+            db, ok = mon._read_rms_db()
+            if not ok:
+                log_fn("[Client-VAD] 读取失败")
+                return False
             peak = max(peak, db)
-            bar = "#" * max(0, int((db + 60) / 3))
-            log_fn("  dB=%.1f %s" % (db, bar))
-            time.sleep(0.3)
-        if peak > mon.energy_threshold_db:
-            log_fn("[Client-VAD] 测试结束：峰值 dB=%.1f → 有声音到达 VAD ✅（链路接通）" % peak)
-        else:
-            log_fn("[Client-VAD] 测试结束：峰值 dB=%.1f → 长期静音，链路未接通 ❌"
-                  "（查 scrcpy 是否真用 CABLE Input / 或把 CABLE Input 设为默认播放设备）" % peak)
+            log_fn("  %.1fdB %s" % (db, "#" * max(0, int((db + 60) / 3))))
+        ok = peak > mon.start_threshold_db
+        log_fn("[Client-VAD] 峰值 %.1fdB，语音链路%s" % (peak, "正常 ✅" if ok else "未接通 ❌"))
+        return ok
     finally:
         mon.close()
 
 
-def list_audio_input_devices(log_fn=print):
-    """枚举并打印本机所有音频【输入】设备（名称+索引），标注回环/混音类。
-
-    用于确认 config.vad_input_device 该填什么：选带「回环/混音」标记的设备名(或索引)。
-    运行 `python -m src.audio.vad` 即可直接查看。"""
-    try:
-        import pyaudio
-        pa = pyaudio.PyAudio()
-    except Exception as e:
-        log_fn("[Client-VAD] ⚠ 无法枚举设备(pyaudio 未装?)：%s" % e)
-        return []
-    found = []
-    log_fn("[Client-VAD] 本机音频输入设备清单：")
-    for i in range(pa.get_device_count()):
-        try:
-            info = pa.get_device_info_by_index(i)
-        except Exception:
-            continue
-        name = (info.get("name") or "?")
-        max_in = int(info.get("maxInputChannels", 0) or 0)
-        if max_in <= 0:
-            continue
-        is_loop = any(k in name.lower() for k in AudioPlaybackMonitor._LOOPBACK_KEYWORDS)
-        tag = "  ← 回环/混音(推荐给 VAD)" if is_loop else ""
-        log_fn("  [%d] %s%s" % (i, name, tag))
-        found.append({"index": i, "name": name, "loopback": is_loop})
-    pa.terminate()
-    if not found:
-        log_fn("[Client-VAD] (无可用输入设备)")
-    return found
-
-
 if __name__ == "__main__":
-    # 直接运行本模块：列出本机音频输入设备 + 自检 VAD + 实时旁听测试(确认链路接通)
     list_audio_input_devices()
-    AudioPlaybackMonitor.quick_probe()
-    run_live_listen_test(6.0)
+    run_live_listen_test()

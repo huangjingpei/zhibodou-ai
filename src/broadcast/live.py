@@ -5,13 +5,70 @@ import tkinter.messagebox as messagebox
 from core import state
 from gui import ui
 from device.input_text import send_text_to_doubao
-from audio.vad import AudioPlaybackMonitor
+from audio.vad import (
+    AudioPlaybackMonitor,
+    VAD_AUDIO_ERROR,
+    VAD_CANCELLED,
+    VAD_ENDED,
+    VAD_START_TIMEOUT,
+    VAD_SPEECH_TIMEOUT,
+    VAD_UNAVAILABLE,
+)
 from settings import config
 from screen import capture
 
 inner_audio_mode = False
 can_next_speak = True
 live_thread = None
+_live_generation = 0
+_vad_stop_event = None
+_current_monitor = None
+_round_lock = threading.Lock()
+
+
+def _read_vad_config():
+    cfg = config.load_config()
+    return {
+        "silence_hold": max(0.5, float(cfg.get("vad_silence_hold_sec", 2.0) or 2.0)),
+        "wait_start": max(3.0, float(cfg.get("vad_wait_start_sec", 15.0) or 15.0)),
+        "speak_confirm": max(0.1, float(cfg.get("vad_speak_confirm_sec", 0.3) or 0.3)),
+        "max_speech": max(10.0, float(cfg.get("vad_max_speech_sec", 45.0) or 45.0)),
+        "energy_threshold": float(cfg.get("vad_energy_threshold_db", -42.0) or -42.0),
+        "noise_margin": max(3.0, float(cfg.get("vad_noise_margin_db", 6.0) or 6.0)),
+        "end_hysteresis": max(1.0, float(cfg.get("vad_end_hysteresis_db", 3.0) or 3.0)),
+        "calibration": max(0.3, float(cfg.get("vad_calibration_sec", 0.8) or 0.8)),
+        "calibration_wait": max(1.0, float(cfg.get("vad_calibration_wait_sec", 6.0) or 6.0)),
+    }
+
+
+def _halt_live_from_worker(message):
+    """音频链路失效时安全停播，禁止继续盲发话术。"""
+    global can_next_speak
+    state.is_broadcasting = False
+    can_next_speak = False
+    ui.log_screen(message)
+    ui.set_status("状态：❌VAD 音频异常，直播已停止", "#ff6b6b")
+
+    def _update_controls():
+        capture.stop_capture()
+        if ui.btn_live_start:
+            ui.btn_live_start.config(state=tk.NORMAL)
+        if ui.btn_live_stop:
+            ui.btn_live_stop.config(state=tk.DISABLED)
+        if ui.lab_count:
+            ui.lab_count.config(text="❌VAD 音频异常，已停止")
+
+    if ui.root:
+        ui.root.after(0, _update_controls)
+
+
+def cancel_active_vad():
+    """供停止直播、关机和关闭窗口调用。"""
+    global _live_generation, _vad_stop_event
+    with _round_lock:
+        _live_generation += 1
+        if _vad_stop_event:
+            _vad_stop_event.set()
 
 def run_pre_meet():
     """【执行开播预演】"""
@@ -52,38 +109,98 @@ def toggle_audio_mode():
             ui.btn_audio_mode.config(text="🔊外音模式(TTS语音)", bg="#06d6a0", fg="black")
 
 def send_script_content(text: str):
-    global can_next_speak
+    global can_next_speak, _current_monitor
     if not can_next_speak or not getattr(state, 'is_broadcasting', False):
         return
 
+    try:
+        vad_cfg = _read_vad_config()
+    except (TypeError, ValueError) as exc:
+        _halt_live_from_worker("【VAD】❌ VAD 配置不是有效数字：%s" % exc)
+        return
     can_next_speak = False
+    with _round_lock:
+        generation = _live_generation
+        stop_event = _vad_stop_event
+
+    # 关键时序：先打开并校准音频，再发送消息。这样豆包开口的第一帧不会在
+    # PyAudio 初始化或“发送后基线采样”期间被丢掉。
+    ui.reset_volume_meter()
+    ui.log_screen("【VAD】发送前准备音频设备并测量静音基线...")
+    monitor = AudioPlaybackMonitor(
+        energy_threshold_db=vad_cfg["energy_threshold"],
+        silence_hold_sec=vad_cfg["silence_hold"],
+        speak_confirm_sec=vad_cfg["speak_confirm"],
+        noise_margin_db=vad_cfg["noise_margin"],
+        end_hysteresis_db=vad_cfg["end_hysteresis"],
+        log_fn=ui.log_screen,
+        on_level=ui.set_volume_meter,
+    )
+    with _round_lock:
+        if generation != _live_generation or (stop_event and stop_event.is_set()):
+            monitor.close()
+            return
+        _current_monitor = monitor
+    if not monitor.is_ready or not monitor.calibrate_idle(
+        vad_cfg["calibration"], stop_event, vad_cfg["calibration_wait"]
+    ):
+        monitor.close()
+        with _round_lock:
+            if _current_monitor is monitor:
+                _current_monitor = None
+        if stop_event and stop_event.is_set():
+            return
+        _halt_live_from_worker("【VAD】❌ 音频设备未就绪或静音基线异常，已停止自动直播。")
+        return
+
     ui.log_screen(f"【直播话术】正在发送: {text[:25]}...")
     ok, msg = send_text_to_doubao(text, click_send=True)
 
     if not ok:
+        monitor.close()
+        with _round_lock:
+            if _current_monitor is monitor:
+                _current_monitor = None
         ui.set_status(f"❌话术发送失败: {msg[:20]}", "#ff6b6b")
         can_next_speak = True
         return
 
-    threading.Thread(target=wait_next_round_worker, daemon=True).start()
+    threading.Thread(
+        target=wait_next_round_worker,
+        args=(monitor, generation, stop_event, vad_cfg),
+        daemon=True,
+    ).start()
 
-def wait_next_round_worker():
-    global can_next_speak
-    cfg = config.load_config()
-    silence_hold = float(cfg.get("vad_silence_hold_sec", 2.0) or 2.0)
-    wait_start = float(cfg.get("vad_wait_start_sec", 15.0) or 15.0)
-    speak_confirm = float(cfg.get("vad_speak_confirm_sec", 0.3) or 0.3)
-    max_speech = float(cfg.get("vad_max_speech_sec", 45.0) or 45.0)
-
+def wait_next_round_worker(audio_monitor, generation, stop_event, vad_cfg):
+    global can_next_speak, _current_monitor
+    ui.log_screen(
+        "【VAD】本轮持续监听：思考等待≤%.0fs；检测到开口后，连续静音 %.1fs 才切换。"
+        % (vad_cfg["wait_start"], vad_cfg["silence_hold"])
+    )
+    try:
+        result = audio_monitor.wait_for_doubao_speech_cycle(
+            max_wait_start_sec=vad_cfg["wait_start"],
+            max_speech_timeout_sec=vad_cfg["max_speech"],
+            stop_event=stop_event,
+        )
+    except Exception as exc:
+        audio_monitor.close()
+        ui.log_screen("【VAD】❌ 状态机异常：%s" % exc)
+        result = VAD_AUDIO_ERROR
+    with _round_lock:
+        if _current_monitor is audio_monitor:
+            _current_monitor = None
+        stale = generation != _live_generation
     ui.reset_volume_meter()
-    ui.log_screen(f"【VAD】本轮监听中：先等豆包开口(思考等待≤{wait_start:.0f}s)，开口后静音超 {silence_hold:.1f}s 即切入下一段话术")
-    audio_monitor = AudioPlaybackMonitor(silence_hold_sec=silence_hold,
-                                         speak_confirm_sec=speak_confirm,
-                                         log_fn=ui.log_screen, on_level=ui.set_volume_meter)
-    # 切话术完全由 VAD 静音时长驱动：豆包说完后连续静音超 silence_hold 即判"说完了"，立即放行下一句。
-    audio_monitor.wait_for_doubao_speech_cycle(max_wait_start_sec=wait_start, max_speech_timeout_sec=max_speech)
-    ui.reset_volume_meter()
-
+    if stale or result == VAD_CANCELLED or (stop_event and stop_event.is_set()):
+        return
+    if result in (VAD_UNAVAILABLE, VAD_AUDIO_ERROR, VAD_SPEECH_TIMEOUT):
+        _halt_live_from_worker("【VAD】❌ 音频流异常或单句达到保护上限，已停止自动直播，未放行下一句。")
+        return
+    if result == VAD_ENDED:
+        ui.log_screen("【VAD】✅ 确认豆包已停止播放，切换到下一条话术。")
+    elif result == VAD_START_TIMEOUT:
+        ui.log_screen("【VAD】⚠ 豆包未产生语音回答，按超时策略进入下一条话术。")
     can_next_speak = True
     if ui.lab_count:
         ui.root.after(0, lambda: ui.lab_count.config(text="✅可以执行下一轮"))
@@ -107,15 +224,21 @@ def auto_live_loop():
 
                 seq_index = (seq_index + 1) % 3
             time.sleep(0.5)
-        except Exception:
+        except Exception as exc:
+            ui.log_screen("【直播循环】异常：%s" % exc)
             time.sleep(1)
 
 def start_live():
-    global live_thread, can_next_speak
+    global live_thread, can_next_speak, _live_generation, _vad_stop_event
     if not getattr(state, 'system_power', False):
         messagebox.showwarning("提示", "请先打开总电源！")
         return
 
+    if getattr(state, 'is_broadcasting', False):
+        return
+    with _round_lock:
+        _live_generation += 1
+        _vad_stop_event = threading.Event()
     state.is_broadcasting = True
     can_next_speak = True
 
@@ -133,6 +256,7 @@ def start_live():
     live_thread.start()
 
 def stop_live():
+    cancel_active_vad()
     state.is_broadcasting = False
     capture.stop_capture()
 

@@ -24,6 +24,8 @@ SCRCPY_OPTIMIZED_ARGS = [
     "--video-bit-rate", "4M",        # 4Mbps 足够话术直播高清显示
     "--max-fps", "30",               # 直播话术画面 30 帧足够，降低发热与延迟
     "--audio-codec", "raw",          # 采用 PCM Raw 编码，省去手机端 AAC 压缩编码耗时
+    "--audio-source", "output",       # 明确捕获手机完整输出，而不是麦克风
+    "--require-audio",                # 音频失败必须退出，禁止“有画面但 VAD 永久静音”
     "--audio-buffer", "20",          # 音频缓冲 20ms（默认 50ms），极致低延迟；无线连接若卡顿可调大
     "--video-buffer", "0",           # 视频缓冲 0ms，杜绝画面排队卡顿
     "--stay-awake",                  # 会话期间保持手机唤醒，避免灭屏后音频被节流
@@ -38,6 +40,8 @@ SCRCPY_VIDEO_ONLY_ARGS = [
     "--video-bit-rate", "4M",
     "--max-fps", "30",
     "--video-buffer", "0",
+    "--audio-source", "output",
+    "--require-audio",
     "--stay-awake",
 ]
 # 最终兜底：仅保活投屏（无音视频调优）
@@ -45,6 +49,8 @@ SCRCPY_FALLBACK_ARGS = [
     SCRCPY_EXE,
     "--window-title", "scrcpy",
     "--max-size", "720",
+    "--audio-source", "output",
+    "--require-audio",
     "--stay-awake",
 ]
 
@@ -52,16 +58,17 @@ SCRCPY_FALLBACK_ARGS = [
 def start_scrcpy_embed():
     """启动 scrcpy 子进程并尝试把窗口嵌入 embed_container。
     优先使用 SCRCPY_OPTIMIZED_ARGS（视频低码率/低帧率 + 音频低延迟 PCM 直出）；
-    若 scrcpy 版本过旧不支持这些参数会立即退出，则自动回退到 SCRCPY_FALLBACK_ARGS，
-    保证投屏永远能起来。"""
+    若优化参数不兼容则分级回退；但音频不可用时必须失败，禁止启动“只有画面”的假 VAD。"""
     if state.scrcpy_process is not None:
-        return
+        if state.scrcpy_process.poll() is None:
+            return True
+        state.scrcpy_process = None
     if not os.path.exists(SCRCPY_EXE):
         messagebox.showerror("文件缺失", f"找不到scrcpy.exe\n{SCRCPY_EXE}")
-        return
+        return False
 
-    # scrcpy 经 SDL2 播放音频：用 SDL_AUDIO_DEVICE_NAME 把手机声音单独定向到虚拟音频线输入，
-    # 与 config.vad_input_device 的「输出」端成对，VAD 才能听到豆包发声（不影响系统其他声音）。
+    # 内置 scrcpy 4.1 经 SDL3 的默认播放端点输出音频。配置名用于核对 Windows 默认
+    # 播放设备，与 vad_input_device 的“输出”端成对，VAD 才能听到豆包发声。
     scrcpy_out_dev = ""
     try:
         from settings import config as _cfg
@@ -74,9 +81,14 @@ def start_scrcpy_embed():
         launch_env["SDL_AUDIO_DEVICE_NAME"] = scrcpy_out_dev
         # 校验该【播放/输出】设备是否真实存在：SDL 对设备名大小写/空格敏感，拼错会静默回退默认设备
         _dev_ok = False
+        _default_out_name = ""
         try:
             import pyaudio
             _pa = pyaudio.PyAudio()
+            try:
+                _default_out_name = (_pa.get_default_output_device_info().get("name") or "")
+            except Exception:
+                _default_out_name = ""
             for _i in range(_pa.get_device_count()):
                 _info = _pa.get_device_info_by_index(_i)
                 if int(_info.get("maxOutputChannels", 0) or 0) > 0 and \
@@ -86,25 +98,46 @@ def start_scrcpy_embed():
             _pa.terminate()
         except Exception:
             _dev_ok = False
+            _default_out_name = ""
         if _dev_ok:
-            ui.log_screen("【投屏】🎯 手机音频流将经 SDL 定向到输出设备【%s】(CABLE Input)，"
-                          "再由 CABLE Output 镜像给 VAD / OBS；若 VAD 监听 dB 仍长期为静音，"
-                          "说明该名字未被 SDL 认到，请核对设备全名。"
-                          "（正式开播后若出现【Client-VAD】✅ 检测到语流开始，即证明 SDL 真正把声音送进了 CABLE）"
-                          % scrcpy_out_dev)
+            # 内置 scrcpy 4.1 使用 SDL 默认播放端点。环境变量保留作兼容提示，但不能把
+            # “设备存在”误当成“scrcpy 已定向成功”；必须校验 Windows 默认播放设备。
+            _family = scrcpy_out_dev.split("(", 1)[0].strip().lower()
+            if not _default_out_name or _family not in _default_out_name.lower():
+                ui.log_screen("【投屏】❌ Windows 默认播放设备为【%s】，不是配置的【%s】。"
+                              "scrcpy 4.1 会打开默认播放端点，VAD 将收不到手机声音；"
+                              "请先把 CABLE Input 设为 Windows 默认播放设备。"
+                              % (_default_out_name or "未知", scrcpy_out_dev))
+                messagebox.showerror(
+                    "音频路由未就绪",
+                    "scrcpy 需要把手机声音送入虚拟音频线。\n\n"
+                    f"当前默认播放设备：{_default_out_name or '未知'}\n"
+                    f"要求的播放设备：{scrcpy_out_dev}\n\n"
+                    "请在 Windows 声音设置中把 CABLE Input 设为默认播放设备后重试。",
+                )
+                return False
+            ui.log_screen("【投屏】✅ 默认播放设备【%s】与配置匹配；"
+                          "手机音频将进入 CABLE Input，再由 CABLE Output 提供给 VAD。"
+                          % _default_out_name)
         else:
-            ui.log_screen("【投屏】⚠ 本机未找到播放设备【%s】，SDL 可能静默回退默认设备；"
-                          "请运行 python -m src.audio.vad 核对设备全名，或把该设备设为 Windows 默认播放设备。"
+            ui.log_screen("【投屏】❌ 本机未找到播放设备【%s】，拒绝启动无音频投屏。"
+                          "请运行 python -m src.audio.vad 核对设备全名。"
                           % scrcpy_out_dev)
+            return False
 
-    # 分级尝试启动参数：全量优化 -> 仅视频调优 -> 基础保活。
-    # 任一级进程在 3s 内退出(参数不被支持)，自动降到下一级，保证投屏永远能起。
+    # 分级尝试启动参数：全量优化 -> 默认音频+视频调优 -> 基础音频保活。
+    # --require-audio 在每一级都保留，音频失败不能降级成只有画面的模式。
     for level, (level_name, args) in enumerate([
         ("全量优化", SCRCPY_OPTIMIZED_ARGS),
         ("仅视频调优", SCRCPY_VIDEO_ONLY_ARGS),
         ("基础保活", SCRCPY_FALLBACK_ARGS),
     ], start=1):
-        state.scrcpy_process = subprocess.Popen(args, cwd=SCRCPY_DIR, env=launch_env)
+        try:
+            state.scrcpy_process = subprocess.Popen(args, cwd=SCRCPY_DIR, env=launch_env)
+        except Exception as exc:
+            ui.log_screen("【投屏】启动 scrcpy 失败：%s" % exc)
+            state.scrcpy_process = None
+            return False
         deadline = time.time() + 3.0
         exited_early = False
         while time.time() < deadline:
@@ -116,15 +149,18 @@ def start_scrcpy_embed():
         if not exited_early:
             if level > 1:
                 ui.log_screen("【投屏】当前 scrcpy 版本不支持部分优化参数，已回退到「%s」模式"
-                              "（建议升级 scrcpy ≥ 2.2 以启用低延迟音频/低码率视频）" % level)
+                              "（建议升级 scrcpy ≥ 2.2 以启用低延迟音频/低码率视频）" % level_name)
             break
         try:
             state.scrcpy_process.terminate()
         except Exception:
             pass
     else:
-        # 三轮都异常退出（极端情况），最后再保底拉一次基础模式
-        state.scrcpy_process = subprocess.Popen(SCRCPY_FALLBACK_ARGS, cwd=SCRCPY_DIR, env=launch_env)
+        # 三轮都退出时通常是 --require-audio 检测到手机音频不可用；不能再以
+        # “只有画面”的模式假装启动成功，否则 VAD 会永久收不到语音。
+        state.scrcpy_process = None
+        ui.log_screen("【投屏】❌ scrcpy 各启动模式均退出，手机音频捕获不可用。")
+        return False
 
     def embed_work():
         parent_hwnd = win_embed.get_tk_widget_hwnd(ui.embed_container)
@@ -141,6 +177,7 @@ def start_scrcpy_embed():
             win_embed.real_embed_window(state.scrcpy_hwnd, parent_hwnd, 0, 0, 290, 530)
 
     threading.Thread(target=embed_work, daemon=True).start()
+    return True
 
 
 def lock_scrcpy_loop():
