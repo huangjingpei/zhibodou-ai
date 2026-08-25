@@ -36,7 +36,7 @@ def check_doubao_ready():
     完全基于轻量级设备状态探测，不执行任何 dump
     返回: (ok: bool, problems: list[str], mode: str)
     """
-    online = adb_utils.adb_devices_online()
+    online = adb_utils.adb_devices_online(verbose=True)
     if not online:
         return False, ["ℹ️ 未检测到 adb 设备，进入手动模式"], "offline"
 
