@@ -1,15 +1,20 @@
 import json
 import os
 import random
+import shutil
 import sys
 import threading
 import time
 import traceback
 import winreg
+from pathlib import Path
 
-from configobj import ConfigObj
 from playwright.sync_api import sync_playwright as playwright
-from concurrent.futures import ThreadPoolExecutor
+
+# 兼容“python src/danma/main.py”与客户端内“import danma.main”两种入口。
+_DANMA_DIR = os.path.dirname(os.path.abspath(__file__))
+if _DANMA_DIR not in sys.path:
+    sys.path.insert(0, _DANMA_DIR)
 
 from live_plate.Message import CreatSystemMessage
 from live_plate.bili.bilili import decode_packet
@@ -23,33 +28,42 @@ from live_plate.vx.vx import ParseVxMessage
 from live_plate.xhs.xhs import Xhs
 from live_plate.tb.tb import Tb
 
-import requests
-
-
-class driver1:
-    def __init__(self):
+class DanmuBrowserCollector:
+    def __init__(
+        self,
+        platform="douyin",
+        url="",
+        headless=True,
+        user_data_dir=None,
+        chrome_path=None,
+        message_callback=None,
+        log_fn=print,
+    ):
         super().__init__()
-        self.flag_close = False
+        self.platform = str(platform or "douyin").strip().lower()
+        self.url = str(url or "").strip().strip("'\"")
+        self.headless = bool(headless)
+        self.user_data_dir = user_data_dir
+        self.chrome_path = chrome_path
+        self.message_callback = message_callback
+        self.log_fn = log_fn
+        self._stop_event = threading.Event()
         self.browser = None
         self.page = None
-        self.flag = True
         self.lock = threading.RLock()
-        self.config = None
         self.vx_gift_count = {}
         self.vx_person = {}
         self.vx_person_url = {}
-        self.session = requests.Session()
-        self.pool = ThreadPoolExecutor(max_workers=100)
         self.ParseTbMessage = Tb().ParseTbComment
         self.ParsePddMessage = Pdd().pdd_pb
         self.ParseXhsMessage = Xhs().ParseXhsComment
         self.ParseXhsShopMessage = Xhs().ParseXhsShopComment
 
-
-
     def getUserData(self):
-
-        return os.path.join(os.getenv("LOCALAPPDATA"), "AiCommentSdk")
+        if self.user_data_dir:
+            return os.path.abspath(os.path.expandvars(self.user_data_dir))
+        local_app_data = os.getenv("LOCALAPPDATA") or str(Path.home())
+        return os.path.join(local_app_data, "Zhibodou", "DanmuBrowserProfile")
 
     def browser_launch(self):
         """
@@ -59,19 +73,11 @@ class driver1:
         :param url:直播间地址
         :return
         """
-        current_path = os.path.abspath(sys.argv[0])
-        current_directory = os.path.dirname(current_path)
-        ini_path = os.path.join(current_directory, 'setting', 'setting.ini')
-
-        self.config = ConfigObj(ini_path, encoding='UTF8')
-        plat = self.config['broadcast']['plat']
-        self.url = self.config['broadcast'][plat]
-        self.message_list = []
-        self.message_list2 = []
-        self.flag_close = False
-        self.vx_seq = []
-        self.flag = True
-        result = checkChrome().check()
+        if not self.url:
+            self.PostMessage([CreatSystemMessage("未配置直播间地址")])
+            return
+        self._stop_event.clear()
+        result = checkChrome(self.chrome_path).check()
         self.PostMessage([CreatSystemMessage(result['tips'])])
         if not result['status']:
             return
@@ -83,60 +89,67 @@ class driver1:
             with playwright() as pw:
 
                 try:
-                    self.browser = pw.chromium.launch_persistent_context(
-                        user_data_dir=self.getUserData(),
-                        executable_path=result['path'],
-                        user_agent=user_agent,
-                        headless=False,
-                        no_viewport=True,
-                        slow_mo=10,
-                        args=['--disable-blink-features=AutomationControlled', '--enable-automation']
-                    )
+                    launch_options = {
+                        "user_data_dir": self.getUserData(),
+                        "user_agent": user_agent,
+                        "headless": self.headless,
+                        "viewport": {"width": 1280, "height": 720} if self.headless else None,
+                        "args": [
+                            "--disable-blink-features=AutomationControlled",
+                            "--autoplay-policy=no-user-gesture-required",
+                        ],
+                    }
+                    if self.chrome_path and result.get('path'):
+                        launch_options["executable_path"] = result['path']
+                    elif result.get('path'):
+                        # Playwright 官方支持 branded Chrome channel；比把自动发现的
+                        # chrome.exe 当作任意 executable_path 更稳定。
+                        launch_options["channel"] = "chrome"
+                    self.browser = pw.chromium.launch_persistent_context(**launch_options)
 
                 except Exception as error:
-                    print(json.dumps({
-                        "type": "SystemMessage",
-                        "content": "浏览器启动失败,请检查设置中的谷歌exe路径"
+                    self.PostMessage([CreatSystemMessage(f"浏览器启动失败：{error}")])
+                    return
 
-                    }), flush=True)
-
-                self.page = self.browser.new_page()
+                pages = self.browser.pages
+                self.page = pages[0] if pages else self.browser.new_page()
                 self.page.on("websocket", self.wss)
                 self.page.on("response", self.http)
                 self.page.on("load", self.execute_js)
 
-                self.page.goto(self.url, timeout=0)
-
-                pages = self.browser.pages
-                if pages:
-                    first_page = pages[0]
-                    first_page.close()
-                while True:
-                    self.page.wait_for_timeout(1000 * 30 * 60)
-                    self.page.goto(self.page.url, timeout=0)
+                self.page.goto(self.url, timeout=60000, wait_until="domcontentloaded")
+                self.PostMessage([CreatSystemMessage(
+                    ("采集页面已启动（headless）" if self.headless else "采集页面已启动（可见模式）")
+                    + f"：{self.page.url}"
+                )])
+                last_refresh = time.monotonic()
+                while not self._stop_event.is_set():
+                    self.page.wait_for_timeout(500)
+                    if time.monotonic() - last_refresh >= 30 * 60:
+                        self.page.reload(timeout=60000, wait_until="domcontentloaded")
+                        last_refresh = time.monotonic()
 
         except Exception as error:
-
             if 'playwright install chrome' in str(error):
                 self.PostMessage([CreatSystemMessage(content='请安装google')])
             else:
-                self.PostMessage([CreatSystemMessage(content='请关闭google再启动')])
-            print(json.dumps({
-                "type": "SystemMessage",
-                "content": f"出错{error}"
-
-            }, ensure_ascii=False), flush=True)
-
-    def execute_js(self, text):
+                self.PostMessage([CreatSystemMessage(content=f'采集器异常：{error}')])
+        finally:
+            try:
+                if self.browser:
+                    self.browser.close()
+            except Exception:
+                pass
+            self.browser = None
+            self.page = None
+    def execute_js(self, _event=None):
+        if self._stop_event.is_set() or self.page is None:
+            return
         self.page.evaluate(f"document.title = '请勿关闭';")
         if 'douyin' in self.page.url:
             self.page.evaluate("""
                     setInterval(checkElement, 5000);
                     setInterval(clickElementByText, 5000);
-                    setInterval(() => {
-                        // 刷新当前页面
-                        location.reload();
-                    },  30*60 * 1000);
                     checkElement()
 
                     function checkElement() {
@@ -195,7 +208,9 @@ class driver1:
         :param response:
         :return:
         """
-        pass
+        # Playwright 同步对象必须由创建它的线程关闭；这里只发停止信号，
+        # browser_launch() 的 finally 会在采集线程完成资源释放。
+        self._stop_event.set()
 
     def http(self, response):
         """
@@ -205,8 +220,6 @@ class driver1:
         :param response:http响应
         :return:
         """
-        if not self.flag:
-            self.browser.close()
         try:
             if 'webcast/im/fetch' in response.url:
                 res = douyin_pb2(data=response.body())
@@ -214,10 +227,6 @@ class driver1:
             if '/live/msg' in response.url:
                 msg = ParseVxMessage(response.json())
                 self.PostMessage(msg)
-            if 'mtop.taobao.iliad.comment.query' in response.url or 'mtop.taobao.iliad.live.user.assistant.data.get' in response.url:
-                msg = Tb().ParseTbComment(response.text())
-                self.PostMessage(msg)
-
             if 'mtop.taobao.iliad.comment.query' in response.url or 'mtop.taobao.iliad.live.user.assistant.data.get' in response.url:
                 msg = self.ParseTbMessage(response.text())
                 self.PostMessage(msg)
@@ -245,9 +254,6 @@ class driver1:
         :return:
         """
         try:
-            if 'tiktok' in websocket.url and "fetch" in websocket.url:
-                websocket.on('framereceived', self.tk_onemssage)
-
             if 'kuaishou.com' in websocket.url:
                 websocket.on('framereceived', self.ks_onmessage)
             elif 'douyin.com/webcast/im/push/' in websocket.url:
@@ -259,10 +265,10 @@ class driver1:
             elif 'ws.master.live' in websocket.url:
                 websocket.on('framereceived', self.nimo_onmessage)
 
-            elif 'pinduoduo.com' in websocket.url or 'duo' in websocket.url:
+            elif 'pinduoduo.com' in websocket.url or 'yangkeduo.com' in websocket.url:
                 websocket.on('framereceived', self.pdd_onmessage2)
 
-            elif 'acebook.com/ws/realtime' in websocket.url:
+            elif 'facebook.com/ws/realtime' in websocket.url:
                 websocket.on('framereceived', self.facebook_onmessage)
 
 
@@ -296,13 +302,16 @@ class driver1:
             print(error)
 
     def facebook_onmessage(self, framereceived):
-        res = ParseFaceBookComment(framereceived)
-        self.PostMessage(res)
+        try:
+            self.PostMessage(ParseFaceBookComment(framereceived))
+        except Exception as error:
+            self.log_fn(f"Facebook 弹幕解析失败：{error}")
 
     def nimo_onmessage(self, framereceived):
-        res = nimo_tars(framereceived)
-        for msg in res:
-            self.PostMessage(res)
+        try:
+            self.PostMessage(nimo_tars(framereceived))
+        except Exception as error:
+            self.log_fn(f"Nimo 弹幕解析失败：{error}")
 
     def bili_onemssage(self, framereceived):
         try:
@@ -315,127 +324,111 @@ class driver1:
             print('出错', framereceived)
 
     def ks_onmessage(self, framereceived):
-        res = kuaishou_pb(data=framereceived)
-        self.PostMessage(res)
+        try:
+            self.PostMessage(kuaishou_pb(data=framereceived))
+        except Exception as error:
+            self.log_fn(f"快手弹幕解析失败：{error}")
 
     def dy_onmessage(self, framereceived):
-        random_x = random.randint(100, 1000)
-        random_y = random.randint(100, 1000)
-        print(random_x, random_y)
-        self.page.mouse.move(random_x, random_y)
-
-        res = douyin_pb(data=framereceived)
-        self.PostMessage(res)
+        try:
+            if not self.headless and self.page is not None:
+                random_x = random.randint(100, 1000)
+                random_y = random.randint(100, 700)
+                self.page.mouse.move(random_x, random_y)
+            self.PostMessage(douyin_pb(data=framereceived))
+        except Exception as error:
+            self.log_fn(f"抖音弹幕解析失败：{error}")
 
     def tk_onemssage(self, framereceived):
-        res = tiktok_pb(data=framereceived)
-        self.PostMessage(res)
+        try:
+            self.PostMessage(tiktok_pb(data=framereceived))
+        except Exception as error:
+            self.log_fn(f"TikTok 弹幕解析失败：{error}")
 
     def pdd_onmessage(self, framereceived):
-        res = pdd_pb(data=framereceived)
-        self.PostMessage(res)
-
-
-    def pdd_onmessage2(self, framereceived):
-        res = self.ParsePddMessage(data=framereceived)
-        self.PostMessage(res)
-
-    def PostMessage(self, data):
-        if len(data) > 0:
-            self.a = threading.Thread(target=self.send_msg, args=(data,))
-            self.a.start()
-
-    def send_msg(self, data):
         try:
-            print("开始推送数据")
-            self.session.post(url='http://127.0.0.1:7979/biz/danmaku/live/msg', json=data)
+            self.PostMessage(pdd_pb(data=framereceived))
         except Exception as error:
-            print("推送出错")
-            print(error)
-
+            self.log_fn(f"PDD 弹幕解析失败：{error}")
+    def pdd_onmessage2(self, framereceived):
+        try:
+            self.PostMessage(self.ParsePddMessage(data=framereceived))
+        except Exception as error:
+            self.log_fn(f"PDD 弹幕解析失败：{error}")
+    def PostMessage(self, data):
+        if not data:
+            return
+        if self.message_callback:
+            try:
+                self.message_callback(data)
+                return
+            except Exception as error:
+                self.log_fn(f"弹幕回调失败：{error}")
+                return
+        print(json.dumps(data, ensure_ascii=False), flush=True)
 
 class checkChrome:
-    def __init__(self):
-        pass
+    def __init__(self, preferred_path=None):
+        self.preferred_path = preferred_path
 
     def get_chrome_info(self):
         chrome_info_list = []
-        try:
-            # 打开注册表中 Chrome 相关的键
-            key_paths = [
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-                r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
-            ]
+        candidates = []
+        if self.preferred_path:
+            candidates.append(os.path.abspath(os.path.expandvars(self.preferred_path)))
+        which_chrome = shutil.which("chrome") or shutil.which("chrome.exe")
+        if which_chrome:
+            candidates.append(which_chrome)
+        key_paths = [
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+        ]
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             for key_path in key_paths:
                 try:
-                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
-                    # 获取执行路径
-                    path, _ = winreg.QueryValueEx(key, "")
-                    # 尝试从版本信息注册表中获取版本号
-                    version_key_path = r"SOFTWARE\Google\Chrome\BLBeacon"
-                    try:
-                        version_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, version_key_path)
-                        version, _ = winreg.QueryValueEx(version_key, "version")
-                        chrome_info_list.append((path, version))
-                        winreg.CloseKey(version_key)
-                    except (FileNotFoundError, OSError):
-                        # 如果无法从上述注册表项获取版本号，尝试从文件属性获取
-                        try:
-                            import win32api
-                            info = win32api.GetFileVersionInfo(path, '\\')
-                            ms = info['FileVersionMS']
-                            ls = info['FileVersionLS']
-                            version = f"{win32api.HIWORD(ms)}.{win32api.LOWORD(ms)}.{win32api.HIWORD(ls)}.{win32api.LOWORD(ls)}"
-                            chrome_info_list.append((path, version))
-                        except Exception:
-                            pass
-                    winreg.CloseKey(key)
-                except FileNotFoundError:
+                    with winreg.OpenKey(hive, key_path) as key:
+                        path, _ = winreg.QueryValueEx(key, "")
+                        candidates.append(path)
+                except OSError:
                     pass
-        except Exception as e:
-            print(f"An error occurred: {e}")
+        candidates.extend([
+            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ])
+        seen = set()
+        for path in candidates:
+            normalized = os.path.normcase(os.path.abspath(path))
+            if normalized in seen or not os.path.isfile(path):
+                continue
+            seen.add(normalized)
+            chrome_info_list.append((path, "已安装"))
         return chrome_info_list
-
-    def compare_versions(self, version1, version2):
-        # 将版本号拆分为数字列表
-        v1_parts = list(map(int, version1.split('.')))
-        v2_parts = list(map(int, version2.split('.')))
-        # 比较每个部分
-        for i in range(max(len(v1_parts), len(v2_parts))):
-            num1 = v1_parts[i] if i < len(v1_parts) else 0
-            num2 = v2_parts[i] if i < len(v2_parts) else 0
-            if num1 > num2:
-                return 1
-            elif num1 < num2:
-                return -1
-        return 0
-
-    def get_highest_version_info(self, chrome_info_list):
-        if not chrome_info_list:
-            return None
-        highest_version_info = chrome_info_list[0]
-        for info in chrome_info_list[1:]:
-            if self.compare_versions(info[1], highest_version_info[1]) > 0:
-                highest_version_info = info
-        return highest_version_info
 
     def check(self):
         chrome_list = self.get_chrome_info()
         if chrome_list:
-            highest_version_info = self.get_highest_version_info(chrome_list)
+            path, version = chrome_list[0]
             return {
                 'status': True,
-                'path': highest_version_info[0],
-                'version': highest_version_info[1],
-                'tips': f"版本号为{highest_version_info[1]}"
+                'path': path,
+                'version': version,
+                'tips': f"使用浏览器：{path}"
             }
-
+        if self.preferred_path:
+            return {'status': False, 'tips': f"配置的 Chrome 不存在：{self.preferred_path}"}
         return {
-            'status': False,
-            'tips': "未找到google"
+            'status': True,
+            'path': None,
+            'version': 'Playwright Chromium',
+            'tips': "未找到本机 Chrome，将尝试 Playwright Chromium"
         }
 
 
+# 兼容原独立脚本的类名。
+driver1 = DanmuBrowserCollector
+
+
 if __name__ == '__main__':
-    driver = driver1()
+    driver = DanmuBrowserCollector(headless=False)
     driver.browser_launch()

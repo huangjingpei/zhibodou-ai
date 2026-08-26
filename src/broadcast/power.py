@@ -9,7 +9,7 @@ from gui import ui
 from device import adb_utils
 from device import input_text
 from screen import scrcpy_embed
-from screen import capture
+from screen import capture, danmu
 from settings import auth
 from core.paths import ADBKEYBOARD_APK
 from device import doubao_check
@@ -109,6 +109,7 @@ def toggle_power():
         state.system_power = False
         state.live_running = False
         state.screenshot_working = False
+        danmu.stop_danmu_capture()
         scrcpy_embed.stop_scrcpy_embed()
         capture.stop_capture()
         ui.btn_power.config(bg="#bb2222")

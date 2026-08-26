@@ -8,7 +8,7 @@ SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from device.input_text import _send_via_agent  # noqa: E402
+from device.input_text import _find_semantic_node, _send_via_agent  # noqa: E402
 
 
 class FakeResponse:
@@ -38,6 +38,22 @@ class AgentProtocolTests(unittest.TestCase):
         urlopen.return_value = FakeResponse({"success": True})
         self.assertTrue(_send_via_agent("测试", click_send=False))
         self.assertIn("/set_text?", urlopen.call_args.args[0])
+
+    def test_semantic_locator_uses_doubao_resource_ids(self):
+        xml = """<hierarchy>
+          <node class="android.widget.EditText" resource-id="com.larus.nova:id/input_text"
+                text="" content-desc="" bounds="[40,1900][880,2200]" />
+          <node class="android.widget.ImageView" resource-id="com.larus.nova:id/action_send"
+                text="" content-desc="发送" bounds="[900,2050][1060,2220]" />
+        </hierarchy>"""
+        self.assertTrue(_find_semantic_node(xml, "input")["resource-id"].endswith("/input_text"))
+        self.assertTrue(_find_semantic_node(xml, "send")["resource-id"].endswith("/action_send"))
+
+    def test_semantic_locator_does_not_guess_bottom_right_control(self):
+        xml = """<hierarchy><node class="android.widget.ImageView" resource-id="photo_picker"
+          clickable="true" bounds="[900,2000][1080,2240]" /></hierarchy>"""
+        self.assertIsNone(_find_semantic_node(xml, "input"))
+        self.assertIsNone(_find_semantic_node(xml, "send"))
 
 
 if __name__ == "__main__":

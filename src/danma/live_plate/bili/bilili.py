@@ -2,9 +2,7 @@ import json
 import struct
 import urllib.parse
 import brotli
-from configobj import ConfigObj
-
-from live_plate.Message import CreatMemberMessage, CreatLikeMessage, CreatGiftMessage
+from live_plate.Message import CreatChatMessage, CreatMemberMessage, CreatLikeMessage, CreatGiftMessage
 
 
 def brotli_decode(bytes):
@@ -93,7 +91,7 @@ def decode_packet(data):
                     name = msg['info'][2][1]
 
                     content = msg['info'][1]
-                    listmessage.append(CreatMemberMessage(name=name, head_image=""))
+                    listmessage.append(CreatChatMessage(name=name, head_image="", content=content))
 
 
                 elif msg['cmd'] == 'INTERACT_WORD':

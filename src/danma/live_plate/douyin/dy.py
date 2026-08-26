@@ -1,6 +1,5 @@
 import base64
 import gzip
-from configobj import ConfigObj
 from google.protobuf.json_format import MessageToDict
 from live_plate.douyin import douyin_message_pb2
 

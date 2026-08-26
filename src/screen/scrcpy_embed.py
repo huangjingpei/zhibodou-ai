@@ -8,7 +8,7 @@ import tkinter.messagebox as messagebox
 from core import state
 from gui import ui
 from screen import win_embed
-from core.paths import SCRCPY_EXE, SCRCPY_DIR
+from core.paths import SCRCPY_EXE, SCRCPY_DIR, LOCAL_ADB
 
 
 # ====================== scrcpy 优化启动参数 ======================
@@ -54,6 +54,39 @@ SCRCPY_FALLBACK_ARGS = [
     "--stay-awake",
 ]
 
+# Android 10 及以下不支持 scrcpy 音频转发。此模式只投屏画面，手机声音
+# 保留在手机扬声器播放，再由实体麦克风 VAD 监听。
+SCRCPY_LEGACY_VIDEO_ARGS = [
+    SCRCPY_EXE,
+    "--window-title", "scrcpy",
+    "--max-size", "720",
+    "--video-bit-rate", "4M",
+    "--max-fps", "30",
+    "--video-buffer", "0",
+    "--no-audio",
+    "--stay-awake",
+]
+
+
+def _get_android_sdk():
+    try:
+        result = subprocess.run(
+            [LOCAL_ADB, "shell", "getprop", "ro.build.version.sdk"],
+            capture_output=True, text=True, timeout=3,
+        )
+        value = (result.stdout or "").strip()
+        return int(value) if value.isdigit() else None
+    except Exception:
+        return None
+
+
+def _is_virtual_audio_route(output_name: str, input_name: str) -> bool:
+    names = (str(output_name or "") + " " + str(input_name or "")).lower()
+    return any(
+        keyword in names
+        for keyword in ("cable", "voicemeeter", "loopback", "立体声混音")
+    )
+
 
 def start_scrcpy_embed():
     """启动 scrcpy 子进程并尝试把窗口嵌入 embed_container。
@@ -68,15 +101,36 @@ def start_scrcpy_embed():
         return False
 
     # 内置 scrcpy 4.1 经 SDL3 的默认播放端点输出音频。配置名用于核对 Windows 默认
-    # 播放设备，与 vad_input_device 的“输出”端成对，VAD 才能听到豆包发声。
+    # 播放设备；使用数字回环时应与 vad_input_device 成对，使用实体麦克风时
+    # 则由麦克风监听该播放设备发出的外放声音。
     scrcpy_out_dev = ""
+    vad_input_dev = ""
     try:
         from settings import config as _cfg
-        scrcpy_out_dev = (_cfg.load_config().get("scrcpy_audio_output_device") or "").strip()
+        _audio_cfg = _cfg.load_config()
+        scrcpy_out_dev = (_audio_cfg.get("scrcpy_audio_output_device") or "").strip()
+        vad_input_dev = (_audio_cfg.get("vad_input_device") or "").strip()
     except Exception:
         scrcpy_out_dev = ""
+        vad_input_dev = ""
+    android_sdk = _get_android_sdk()
+    legacy_phone_audio = android_sdk is not None and android_sdk < 30
+    virtual_audio_route = _is_virtual_audio_route(scrcpy_out_dev, vad_input_dev)
+    if legacy_phone_audio:
+        if virtual_audio_route:
+            ui.log_screen(
+                "【投屏】❌ 当前手机 Android API=%d，不支持 scrcpy 音频转发；"
+                "CABLE/VoiceMeeter 数字回环无法使用。请改用 Android 11+ 手机，"
+                "或把 VAD 输入改为实体麦克风。" % android_sdk
+            )
+            return False
+        ui.log_screen(
+            "【投屏】⚠ 当前手机为 Android API=%d（低于 30），scrcpy 不支持转发音频；"
+            "已切换为仅画面投屏，声音从手机扬声器播放，由实体麦克风 VAD 监听。"
+            % android_sdk
+        )
     launch_env = None
-    if scrcpy_out_dev:
+    if scrcpy_out_dev and not legacy_phone_audio:
         launch_env = os.environ.copy()
         launch_env["SDL_AUDIO_DEVICE_NAME"] = scrcpy_out_dev
         # 校验该【播放/输出】设备是否真实存在：SDL 对设备名大小写/空格敏感，拼错会静默回退默认设备
@@ -106,32 +160,42 @@ def start_scrcpy_embed():
             if not _default_out_name or _family not in _default_out_name.lower():
                 ui.log_screen("【投屏】❌ Windows 默认播放设备为【%s】，不是配置的【%s】。"
                               "scrcpy 4.1 会打开默认播放端点，VAD 将收不到手机声音；"
-                              "请先把 CABLE Input 设为 Windows 默认播放设备。"
+                              "请先把配置的播放设备设为 Windows 默认播放设备。"
                               % (_default_out_name or "未知", scrcpy_out_dev))
                 messagebox.showerror(
                     "音频路由未就绪",
-                    "scrcpy 需要把手机声音送入虚拟音频线。\n\n"
+                    "scrcpy 需要从配置的 Windows 默认播放设备输出手机声音。\n\n"
                     f"当前默认播放设备：{_default_out_name or '未知'}\n"
                     f"要求的播放设备：{scrcpy_out_dev}\n\n"
-                    "请在 Windows 声音设置中把 CABLE Input 设为默认播放设备后重试。",
+                    f"请在 Windows 声音设置中把 {scrcpy_out_dev} 设为默认播放设备后重试。",
                 )
                 return False
             ui.log_screen("【投屏】✅ 默认播放设备【%s】与配置匹配；"
-                          "手机音频将进入 CABLE Input，再由 CABLE Output 提供给 VAD。"
-                          % _default_out_name)
+                          "scrcpy 手机音频将从该设备播放。" % _default_out_name)
+            if virtual_audio_route:
+                ui.log_screen("【投屏】VAD 使用数字回环输入【%s】。" % (vad_input_dev or "自动选择"))
+            else:
+                ui.log_screen(
+                    "【投屏】⚠ VAD 使用实体麦克风【%s】监听扬声器，已启用相对底噪自适应；"
+                    "环境噪声或系统音量过低仍可能影响识别。" % (vad_input_dev or "系统默认")
+                )
         else:
             ui.log_screen("【投屏】❌ 本机未找到播放设备【%s】，拒绝启动无音频投屏。"
                           "请运行 python -m src.audio.vad 核对设备全名。"
                           % scrcpy_out_dev)
             return False
 
-    # 分级尝试启动参数：全量优化 -> 默认音频+视频调优 -> 基础音频保活。
-    # --require-audio 在每一级都保留，音频失败不能降级成只有画面的模式。
-    for level, (level_name, args) in enumerate([
-        ("全量优化", SCRCPY_OPTIMIZED_ARGS),
-        ("仅视频调优", SCRCPY_VIDEO_ONLY_ARGS),
-        ("基础保活", SCRCPY_FALLBACK_ARGS),
-    ], start=1):
+    # Android 10 及以下走手机扬声器 + 实体麦克风；新系统才尝试 scrcpy 音频转发。
+    launch_modes = (
+        [("Android 10 画面投屏", SCRCPY_LEGACY_VIDEO_ARGS)]
+        if legacy_phone_audio
+        else [
+            ("全量优化", SCRCPY_OPTIMIZED_ARGS),
+            ("仅视频调优", SCRCPY_VIDEO_ONLY_ARGS),
+            ("基础保活", SCRCPY_FALLBACK_ARGS),
+        ]
+    )
+    for level, (level_name, args) in enumerate(launch_modes, start=1):
         try:
             state.scrcpy_process = subprocess.Popen(args, cwd=SCRCPY_DIR, env=launch_env)
         except Exception as exc:
@@ -159,7 +223,10 @@ def start_scrcpy_embed():
         # 三轮都退出时通常是 --require-audio 检测到手机音频不可用；不能再以
         # “只有画面”的模式假装启动成功，否则 VAD 会永久收不到语音。
         state.scrcpy_process = None
-        ui.log_screen("【投屏】❌ scrcpy 各启动模式均退出，手机音频捕获不可用。")
+        if legacy_phone_audio:
+            ui.log_screen("【投屏】❌ Android 10 仅画面投屏仍启动失败，请检查 USB 调试和设备授权。")
+        else:
+            ui.log_screen("【投屏】❌ scrcpy 各启动模式均退出，手机音频捕获不可用。")
         return False
 
     def embed_work():

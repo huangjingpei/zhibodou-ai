@@ -11,11 +11,10 @@ from audio.vad import (
     VAD_CANCELLED,
     VAD_ENDED,
     VAD_START_TIMEOUT,
-    VAD_SPEECH_TIMEOUT,
     VAD_UNAVAILABLE,
 )
 from settings import config
-from screen import capture
+from screen import capture, danmu
 
 inner_audio_mode = False
 can_next_speak = True
@@ -26,13 +25,22 @@ _current_monitor = None
 _round_lock = threading.Lock()
 
 
+def build_doubao_host_prompt(content: str) -> str:
+    """给每次豆包请求统一添加主播角色及纯口播约束。"""
+    content = str(content or "").strip()
+    host_prompt = str(
+        config.load_config().get("doubao_host_prompt")
+        or config.DEFAULT_CFG["doubao_host_prompt"]
+    ).strip()
+    return "%s\n\n本次直播话术要求：%s" % (host_prompt, content)
+
+
 def _read_vad_config():
     cfg = config.load_config()
     return {
         "silence_hold": max(0.5, float(cfg.get("vad_silence_hold_sec", 2.0) or 2.0)),
         "wait_start": max(3.0, float(cfg.get("vad_wait_start_sec", 15.0) or 15.0)),
         "speak_confirm": max(0.1, float(cfg.get("vad_speak_confirm_sec", 0.3) or 0.3)),
-        "max_speech": max(10.0, float(cfg.get("vad_max_speech_sec", 45.0) or 45.0)),
         "energy_threshold": float(cfg.get("vad_energy_threshold_db", -42.0) or -42.0),
         "noise_margin": max(3.0, float(cfg.get("vad_noise_margin_db", 6.0) or 6.0)),
         "end_hysteresis": max(1.0, float(cfg.get("vad_end_hysteresis_db", 3.0) or 3.0)),
@@ -41,13 +49,13 @@ def _read_vad_config():
     }
 
 
-def _halt_live_from_worker(message):
+def _halt_live_from_worker(message, status_text="VAD 音频异常"):
     """音频链路失效时安全停播，禁止继续盲发话术。"""
     global can_next_speak
     state.is_broadcasting = False
     can_next_speak = False
     ui.log_screen(message)
-    ui.set_status("状态：❌VAD 音频异常，直播已停止", "#ff6b6b")
+    ui.set_status("状态：❌%s，直播已停止" % status_text, "#ff6b6b")
 
     def _update_controls():
         capture.stop_capture()
@@ -56,7 +64,7 @@ def _halt_live_from_worker(message):
         if ui.btn_live_stop:
             ui.btn_live_stop.config(state=tk.DISABLED)
         if ui.lab_count:
-            ui.lab_count.config(text="❌VAD 音频异常，已停止")
+            ui.lab_count.config(text="❌%s，已停止" % status_text)
 
     if ui.root:
         ui.root.after(0, _update_controls)
@@ -87,7 +95,7 @@ def run_pre_meet():
     ui.set_status("状态：⏳正在向豆包下发预演话术...", "#00e5ff")
     ui.log_screen(f"【开播预演】正在下发: {content[:30]}...")
 
-    ok, msg = send_text_to_doubao(content, click_send=True)
+    ok, msg = send_text_to_doubao(build_doubao_host_prompt(content), click_send=True)
     if not ok:
         ui.set_status("状态：❌预演下发失败", "#ff6b6b")
         ui.log_screen(f"【开播预演】❌失败: {msg}")
@@ -153,8 +161,13 @@ def send_script_content(text: str):
         _halt_live_from_worker("【VAD】❌ 音频设备未就绪或静音基线异常，已停止自动直播。")
         return
 
+    # 实体麦克风模式会把结束确认窗口自动提高到至少 8 秒；让工作线程的提示
+    # 与状态机实际使用值一致。
+    vad_cfg = dict(vad_cfg)
+    vad_cfg["silence_hold"] = monitor.active_silence_hold_sec
+
     ui.log_screen(f"【直播话术】正在发送: {text[:25]}...")
-    ok, msg = send_text_to_doubao(text, click_send=True)
+    ok, msg = send_text_to_doubao(build_doubao_host_prompt(text), click_send=True)
 
     if not ok:
         monitor.close()
@@ -180,7 +193,6 @@ def wait_next_round_worker(audio_monitor, generation, stop_event, vad_cfg):
     try:
         result = audio_monitor.wait_for_doubao_speech_cycle(
             max_wait_start_sec=vad_cfg["wait_start"],
-            max_speech_timeout_sec=vad_cfg["max_speech"],
             stop_event=stop_event,
         )
     except Exception as exc:
@@ -194,13 +206,21 @@ def wait_next_round_worker(audio_monitor, generation, stop_event, vad_cfg):
     ui.reset_volume_meter()
     if stale or result == VAD_CANCELLED or (stop_event and stop_event.is_set()):
         return
-    if result in (VAD_UNAVAILABLE, VAD_AUDIO_ERROR, VAD_SPEECH_TIMEOUT):
-        _halt_live_from_worker("【VAD】❌ 音频流异常或单句达到保护上限，已停止自动直播，未放行下一句。")
+    if result in (VAD_UNAVAILABLE, VAD_AUDIO_ERROR):
+        _halt_live_from_worker(
+            "【VAD】❌ 音频采集设备不可用或读取中断，已停止自动直播，未放行下一句。",
+            "VAD 音频采集失败",
+        )
         return
     if result == VAD_ENDED:
         ui.log_screen("【VAD】✅ 确认豆包已停止播放，切换到下一条话术。")
     elif result == VAD_START_TIMEOUT:
-        ui.log_screen("【VAD】⚠ 豆包未产生语音回答，按超时策略进入下一条话术。")
+        _halt_live_from_worker(
+            "【VAD】❌ 等待开口超时：无法确认豆包是否正在播放，"
+            "已停止自动直播并禁止切换下一句。请检查音频采集设备和音量。",
+            "等待豆包开口超时",
+        )
+        return
     can_next_speak = True
     if ui.lab_count:
         ui.root.after(0, lambda: ui.lab_count.config(text="✅可以执行下一轮"))
@@ -239,7 +259,9 @@ def start_live():
     with _round_lock:
         _live_generation += 1
         _vad_stop_event = threading.Event()
+    AudioPlaybackMonitor.reset_session_baseline()
     state.is_broadcasting = True
+    state.live_running = True
     can_next_speak = True
 
     if ui.btn_live_start:
@@ -251,6 +273,7 @@ def start_live():
     ui.log_screen("【直播控制】▶ 自动直播循环已启动！")
 
     ui.reset_volume_meter()
+    danmu.start_danmu_capture()
     capture.start_capture()
     live_thread = threading.Thread(target=auto_live_loop, daemon=True)
     live_thread.start()
@@ -258,6 +281,8 @@ def start_live():
 def stop_live():
     cancel_active_vad()
     state.is_broadcasting = False
+    state.live_running = False
+    danmu.stop_danmu_capture()
     capture.stop_capture()
 
     if ui.btn_live_start:

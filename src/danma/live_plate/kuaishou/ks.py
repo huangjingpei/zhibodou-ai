@@ -1,11 +1,5 @@
 '''
-终端执行，protobuf一定要是3.19.0版本
-pip install -i https://pypi.tuna.tsinghua.edu.cn/simple protobuf==3.19.0
-pip install google
-
-如果google安装后依旧报错
-pip install -i https://mirrors.aliyun.com/pypi/simple/ google-cloud
-pip install -i https://mirrors.aliyun.com/pypi/simple/ google-cloud-vision
+依赖 protobuf；版本范围由项目根 requirements.txt 统一管理。
 
 '''
 

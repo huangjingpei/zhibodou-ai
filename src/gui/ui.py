@@ -13,6 +13,7 @@ lab_like = None
 lab_gift = None
 lab_cap_status = None
 lab_count = None
+lab_danmu_status = None
 volume_canvas = None
 lab_vad_state = None
 embed_container = None
@@ -28,6 +29,10 @@ btn_cap = None
 btn_pwd = None
 btn_auth = None
 btn_save = None
+btn_danmu = None
+cmb_danmu_platform = None
+ent_danmu_url = None
+var_danmu_headless = None
 ent_prod_name = None
 ent_prod_desc = None
 ent_r1min = None
@@ -159,10 +164,11 @@ def reset_volume_meter():
 
 def build_ui():
     """构建全部界面，并把配置回填到控件。"""
-    global root, lab_sys_status, lab_online, lab_like, lab_gift, lab_cap_status, lab_count
+    global root, lab_sys_status, lab_online, lab_like, lab_gift, lab_cap_status, lab_count, lab_danmu_status
     global embed_container, txt_danmu, txt_screen_log, txt_pre_meet
     global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_audio_mode, btn_cap
-    global btn_pwd, btn_auth, btn_save
+    global btn_pwd, btn_auth, btn_save, btn_danmu
+    global cmb_danmu_platform, ent_danmu_url, var_danmu_headless
     global volume_canvas, lab_vad_state, _volume_poll_started
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
@@ -219,6 +225,33 @@ def build_ui():
     ent_prod_desc.grid(row=0, column=3, padx=4, pady=4)
     btn_save = tk.Button(cfg_gb, text="💾保存配置", bg="#374151", fg="white", command=None)
     btn_save.grid(row=0, column=4, padx=8, pady=4)
+
+    tk.Label(cfg_gb, text="弹幕平台", bg="#111827", fg="white").grid(row=1, column=0, padx=5, pady=4)
+    cmb_danmu_platform = ttk.Combobox(
+        cfg_gb,
+        values=("douyin", "kuaishou", "bili", "tiktok", "shipinhao", "xhs", "tb", "pdd", "facebook"),
+        width=11,
+        state="readonly",
+    )
+    cmb_danmu_platform.grid(row=1, column=1, padx=4, pady=4, sticky="w")
+    tk.Label(cfg_gb, text="直播间", bg="#111827", fg="white").grid(row=1, column=2, padx=5, pady=4)
+    ent_danmu_url = tk.Entry(cfg_gb, width=31, bg="#1f2937", fg="white")
+    ent_danmu_url.grid(row=1, column=3, padx=4, pady=4, sticky="we")
+    danmu_actions = tk.Frame(cfg_gb, bg="#111827")
+    danmu_actions.grid(row=1, column=4, padx=4, pady=2)
+    var_danmu_headless = tk.BooleanVar(value=True)
+    tk.Checkbutton(
+        danmu_actions,
+        text="无窗口",
+        variable=var_danmu_headless,
+        bg="#111827",
+        fg="white",
+        selectcolor="#1f2937",
+        activebackground="#111827",
+        activeforeground="white",
+    ).pack(side=tk.LEFT)
+    btn_danmu = tk.Button(danmu_actions, text="▶启动弹幕", bg="#0e7490", fg="white", width=10, command=None)
+    btn_danmu.pack(side=tk.LEFT, padx=3)
 
     meet_gb = tk.LabelFrame(ui_right, text=" 🎤开播预演 ", bg="#111827", fg="#00e5ff", font=("微软雅黑", 10))
     meet_gb.pack(fill=tk.X, pady=3)
@@ -293,6 +326,8 @@ def build_ui():
     lab_online = tk.Label(stat_gb, text="📶 在线：0 人", bg="#111827", fg="white"); lab_online.pack(pady=2)
     lab_like = tk.Label(stat_gb, text="👍 点赞：0", bg="#111827", fg="white"); lab_like.pack(pady=2)
     lab_gift = tk.Label(stat_gb, text="🎁礼物：0", bg="#111827", fg="white"); lab_gift.pack(pady=2)
+    lab_danmu_status = tk.Label(stat_gb, text="💬弹幕：未启动", bg="#111827", fg="#9ca3af")
+    lab_danmu_status.pack(pady=2)
 
     danmu_gb = tk.LabelFrame(bot_left, text=" 💬弹幕消息 ", bg="#111827", fg="#00e5ff", font=("微软雅黑", 10))
     danmu_gb.pack(fill=tk.BOTH, expand=True, pady=2)
@@ -317,6 +352,20 @@ def build_ui():
 
     # 加载配置回填 UI
     cfg_load = config.load_config()
+    danmu_platform = str(cfg_load.get("danmu_platform") or "douyin")
+    danmu_urls = cfg_load.get("danmu_urls") or {}
+    danmu_url = str(cfg_load.get("danmu_url") or danmu_urls.get(danmu_platform) or "")
+    cmb_danmu_platform.set(danmu_platform)
+    ent_danmu_url.insert(0, danmu_url)
+    var_danmu_headless.set(bool(cfg_load.get("danmu_headless", True)))
+
+    def _platform_changed(_event=None):
+        current = ent_danmu_url.get().strip()
+        if not current or current in set(danmu_urls.values()):
+            ent_danmu_url.delete(0, tk.END)
+            ent_danmu_url.insert(0, danmu_urls.get(cmb_danmu_platform.get(), ""))
+
+    cmb_danmu_platform.bind("<<ComboboxSelected>>", _platform_changed)
     ent_prod_name.insert(0, cfg_load["product_name"])
     ent_prod_desc.insert(0, cfg_load["product_desc"])
     txt_pre_meet.insert(tk.END, cfg_load["pre_meet_text"])

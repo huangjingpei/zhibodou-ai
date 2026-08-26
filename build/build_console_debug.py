@@ -47,6 +47,21 @@ hidden = [
     "mouseinfo", "pytweening", "pyrect", "PIL", "PIL.Image",
     "pyaudio", "pyttsx3", "comtypes",
     "websocket", "websocket_client",
+    "playwright", "playwright.sync_api", "playwright._impl", "greenlet",
+]
+
+# asyncio 子模块（playwright 依赖）。PyInstaller 冻结后 asyncio.__init__ 里
+# `from .base_events import *` 不会把子模块名绑定回包命名空间，导致
+# `NameError: name 'base_events' is not defined`，弹幕/浏览器采集启动即崩。
+ASYNCIO_HIDDEN = [
+    "asyncio", "asyncio.base_events", "asyncio.constants", "asyncio.coroutines",
+    "asyncio.events", "asyncio.exceptions", "asyncio.futures", "asyncio.locks",
+    "asyncio.log", "asyncio.proactor_events", "asyncio.protocols", "asyncio.queues",
+    "asyncio.runners", "asyncio.selector_events", "asyncio.sslproto",
+    "asyncio.staggered", "asyncio.streams", "asyncio.subprocess", "asyncio.tasks",
+    "asyncio.taskgroups", "asyncio.timeouts", "asyncio.transports", "asyncio.trsock",
+    "asyncio.unix_events", "asyncio.windows_events", "asyncio.windows_selector_events",
+    "asyncio.windows_utils",
 ]
 
 cmd = [
@@ -54,17 +69,22 @@ cmd = [
     "--onefile",
     "--console",                 # <-- 关键：带黑窗口
     "--name", "zhibodou_console",
+    "--runtime-hook", os.path.join(ROOT, "build", "rth_asyncio.py"),
     "--distpath", DIST_DIR,
     "--workpath", WORK_DIR,
     "--specpath", SPEC_DIR,
     "--noconfirm",
-    "--clean",
+    # 注意：不要加 --clean。本构建环境的"安全删除"钩子会拦截 PyInstaller 的
+    # 清理步骤（批量删 50+ 临时文件需人工确认），导致构建以非零码中止。
+    # 去掉 --clean 后可正常构建，PyInstaller 会直接覆盖 work 目录。
     "--paths", os.path.join(ROOT, "src"),
 ]
 for d in datas:
     cmd += ["--add-data", d]
 for h in hidden:
     cmd += ["--hidden-import", h]
+for m in ASYNCIO_HIDDEN:
+    cmd += ["--hidden-import", m]
 
 cmd.append(ENTRY)
 

@@ -16,7 +16,6 @@ from typing import Callable, Optional, Tuple
 
 VAD_ENDED = "ended"
 VAD_START_TIMEOUT = "start_timeout"
-VAD_SPEECH_TIMEOUT = "speech_timeout"
 VAD_CANCELLED = "cancelled"
 VAD_UNAVAILABLE = "unavailable"
 VAD_AUDIO_ERROR = "audio_error"
@@ -29,6 +28,12 @@ class AudioPlaybackMonitor:
         "stereo mix", "wave out", "what u hear", "监听", "loopback",
         "mixing", "立体声混音", "cable output", "voicemeeter output",
     )
+    _trusted_mic_floor_db = None
+
+    @classmethod
+    def reset_session_baseline(cls):
+        """每次正式开播重新建立可信麦克风静音基线。"""
+        cls._trusted_mic_floor_db = None
 
     def __init__(
         self,
@@ -47,6 +52,7 @@ class AudioPlaybackMonitor:
         self.end_hysteresis_db = max(1.0, float(end_hysteresis_db))
         self.start_threshold_db = self.energy_threshold_db
         self.end_threshold_db = self.energy_threshold_db - self.end_hysteresis_db
+        self.active_silence_hold_sec = self.silence_hold_sec
         self.idle_floor_db = -100.0
         self._log = log_fn
         self._on_level = on_level
@@ -223,6 +229,18 @@ class AudioPlaybackMonitor:
         power = sum(10.0 ** (db / 10.0) for db in levels) / len(levels)
         return -100.0 if power <= 1e-10 else 10.0 * math.log10(power)
 
+    @staticmethod
+    def _weighted_db(previous_db: Optional[float], current_db: float) -> float:
+        """上一值占 5/8、最新值占 3/8 的指数平滑。"""
+        if previous_db is None:
+            return current_db
+        return previous_db * (5.0 / 8.0) + current_db * (3.0 / 8.0)
+
+    def _uses_digital_loopback(self) -> bool:
+        """虚拟音频线可用固定阈值；实体麦克风必须按本机底噪自适应。"""
+        name = str(self._device_name or "").lower()
+        return any(keyword in name for keyword in self._LOOPBACK_KEYWORDS)
+
     def calibrate_idle(
         self,
         sec: float = 0.8,
@@ -259,16 +277,58 @@ class AudioPlaybackMonitor:
                         return False
             if not levels:
                 continue
-            self.idle_floor_db = self._percentile(levels, 0.9)
-            self.start_threshold_db = max(
-                self.energy_threshold_db, self.idle_floor_db + self.noise_margin_db
-            )
-            self.end_threshold_db = self.start_threshold_db - self.end_hysteresis_db
+            candidate_floor_db = self._percentile(levels, 0.9)
+            self.idle_floor_db = candidate_floor_db
+            is_digital_loopback = self._uses_digital_loopback()
+            trusted_floor_db = AudioPlaybackMonitor._trusted_mic_floor_db
+            if (
+                not is_digital_loopback
+                and trusted_floor_db is not None
+                and candidate_floor_db > trusted_floor_db + 1.5
+            ):
+                self._log(
+                    "[Client-VAD] ⚠ 当前基线 %.1fdB 比本次直播静音基线 %.1fdB 高，"
+                    "豆包可能仍在播放；继续等待，不发送下一句。"
+                    % (candidate_floor_db, trusted_floor_db)
+                )
+                continue
+            if is_digital_loopback:
+                mode = "数字回环"
+                self.active_silence_hold_sec = self.silence_hold_sec
+                self.start_threshold_db = max(
+                    self.energy_threshold_db, self.idle_floor_db + self.noise_margin_db
+                )
+                self.end_threshold_db = self.start_threshold_db - self.end_hysteresis_db
+            else:
+                # 实体麦克风收到的是扬声器经过空气传播后的声音，电平通常比数字回环
+                # 低很多。日志中的底噪约 -50dB、豆包语音约 -45dB，固定 -42dB
+                # 会让整段语音都无法进入 SPEAKING。使用相对底噪阈值，并设置安全下限。
+                mode = "麦克风自适应"
+                mic_margin_db = max(2.5, min(4.0, self.noise_margin_db * 0.5))
+                self.start_threshold_db = max(
+                    -65.0,
+                    min(self.energy_threshold_db, self.idle_floor_db + mic_margin_db),
+                )
+                # 结束检测要覆盖轻声段。以静音 P90 上方 0.5dB 为界，比原来的
+                # start-1dB 更敏感；后续再用时间窗口过滤环境噪声尖峰。
+                self.end_threshold_db = max(-65.0, self.idle_floor_db + 0.5)
+                # 麦克风电平会随距离、声学回声消除和轻声段大幅波动。日志中连续
+                # 2～3 秒低于阈值仍可能只是句内弱音，因此使用更保守的结束窗口。
+                self.active_silence_hold_sec = max(8.0, self.silence_hold_sec)
             if self.idle_floor_db <= -25.0 and self.start_threshold_db <= -12.0:
                 self._log(
-                    "[Client-VAD] 校准完成：底噪=%.1fdB｜开口阈值=%.1fdB｜结束阈值=%.1fdB"
-                    % (self.idle_floor_db, self.start_threshold_db, self.end_threshold_db)
+                    "[Client-VAD] 校准完成：模式=%s｜底噪=%.1fdB｜开口阈值=%.1fdB｜"
+                    "结束阈值=%.1fdB｜结束确认=%.1fs"
+                    % (
+                        mode,
+                        self.idle_floor_db,
+                        self.start_threshold_db,
+                        self.end_threshold_db,
+                        self.active_silence_hold_sec,
+                    )
                 )
+                if not is_digital_loopback and trusted_floor_db is None:
+                    AudioPlaybackMonitor._trusted_mic_floor_db = self.idle_floor_db
                 return True
             if self._clock() < deadline:
                 self._log(
@@ -303,27 +363,33 @@ class AudioPlaybackMonitor:
         if not self._on_level:
             return
         try:
-            self._on_level(db, avg, speaking, silence_elapsed, self.silence_hold_sec, phase)
+            self._on_level(
+                db,
+                avg,
+                speaking,
+                silence_elapsed,
+                self.active_silence_hold_sec,
+                phase,
+            )
         except Exception:
             pass
 
     def wait_for_doubao_speech_cycle(
         self,
         max_wait_start_sec: float = 15.0,
-        max_speech_timeout_sec: float = 45.0,
         stop_event: Optional[threading.Event] = None,
         close_on_finish: bool = True,
     ) -> str:
-        """持续等待一次完整的“开口 -> 说话 -> 静音结束”周期。"""
+        """持续等待“开口 -> 说话 -> 静音结束”，不限制豆包播放时长。"""
         self._log(
             "[Client-VAD] 启动状态机：开口阈值=%.1fdB｜结束阈值=%.1fdB｜静音维持=%.1fs"
-            % (self.start_threshold_db, self.end_threshold_db, self.silence_hold_sec)
+            % (self.start_threshold_db, self.end_threshold_db, self.active_silence_hold_sec)
         )
         try:
             if not self._stream:
                 self._log("[Client-VAD] ❌ 没有音频流，停止自动轮播。")
                 return VAD_UNAVAILABLE
-            recent = deque(maxlen=5)
+            weighted_db = None
             consecutive_failures = 0
             last_log = 0.0
             sample_rate = float(self._sample_rate or 48000)
@@ -334,6 +400,7 @@ class AudioPlaybackMonitor:
             # 在滚动窗口内累计有效语音，不能要求每一帧连续越阈值。
             required_voiced_sec = max(0.06, min(self.speak_confirm_sec, 0.15))
             wait_started = self._clock()
+            peak_db = -100.0
             self._log("[Client-VAD] 状态[WAITING]：等待豆包开口，思考期静音不会切句。")
             while self._clock() - wait_started < max_wait_start_sec:
                 if stop_event and stop_event.is_set():
@@ -346,8 +413,9 @@ class AudioPlaybackMonitor:
                         return VAD_AUDIO_ERROR
                     continue
                 consecutive_failures = 0
-                recent.append(db)
-                avg = self._average_db(recent)
+                weighted_db = self._weighted_db(weighted_db, db)
+                avg = weighted_db
+                peak_db = max(peak_db, db, weighted_db)
                 now = self._clock()
                 speaking_now = db > self.start_threshold_db or avg > self.start_threshold_db
                 voice_window.append(speaking_now)
@@ -363,18 +431,28 @@ class AudioPlaybackMonitor:
                     )
                     break
             else:
-                self._log(
-                    "[Client-VAD] ⚠ %.1fs 内未检测到豆包开口，按无语音回答结束本轮。"
-                    % max_wait_start_sec
-                )
+                if peak_db > self.idle_floor_db + 2.0:
+                    self._log(
+                        "[Client-VAD] ❌ 检测到低电平信号（峰值 %.1fdB），但未越过开口阈值 %.1fdB；"
+                        "禁止切换下一句，请检查音频路由或阈值。"
+                        % (peak_db, self.start_threshold_db)
+                    )
+                else:
+                    self._log(
+                        "[Client-VAD] ❌ %.1fs 内未检测到豆包开口（峰值 %.1fdB）；"
+                        "禁止切换下一句，请检查采集设备。"
+                        % (max_wait_start_sec, peak_db)
+                    )
                 return VAD_START_TIMEOUT
 
             speech_started = self._clock()
             silence_started = None
-            recent.clear()
+            weighted_db = None
+            digital_loopback = self._uses_digital_loopback()
+            end_voice_window = deque(maxlen=max(10, int(1.2 / frame_sec)))
             last_log = 0.0
             self._log("[Client-VAD] 状态[SPEAKING]：持续监听，短停顿不会切句。")
-            while self._clock() - speech_started < max_speech_timeout_sec:
+            while True:
                 if stop_event and stop_event.is_set():
                     return VAD_CANCELLED
                 db, ok = self._read_rms_db()
@@ -385,15 +463,28 @@ class AudioPlaybackMonitor:
                         return VAD_AUDIO_ERROR
                     continue
                 consecutive_failures = 0
-                recent.append(db)
-                avg = self._average_db(recent)
+                weighted_db = self._weighted_db(weighted_db, db)
+                avg = weighted_db
                 now = self._clock()
-                # 分包音频恢复时，首个有效原始帧可能已越阈值，但 5 帧平滑值仍被
-                # 前面的 -100dB 空帧拉低。两者任一越阈值都必须取消静音计时，
-                # 否则会在豆包刚恢复出声的同一帧误判 ENDED。
-                speaking_now = db > self.end_threshold_db or avg > self.end_threshold_db
+                if digital_loopback:
+                    # 数字回环的单个有效 PCM 块就是真实语音，必须立即取消静音计时。
+                    frame_has_voice = db > self.end_threshold_db or avg > self.end_threshold_db
+                    speaking_now = frame_has_voice
+                else:
+                    # 实体麦克风的轻声语音可能接近底噪。1.2 秒窗口累计达到
+                    # 0.06 秒才算仍在说话。帧判定使用 5/8 + 3/8 加权值，
+                    # 连续轻声会逐步越阈值，单个键盘/风扇尖峰不会立即重置计时。
+                    frame_has_voice = avg > self.end_threshold_db
+                    end_voice_window.append(frame_has_voice)
+                    speaking_now = sum(end_voice_window) * frame_sec >= 0.06
                 silence_elapsed = None if silence_started is None else now - silence_started
-                self._emit_level(db, avg, speaking_now, silence_elapsed, phase="speaking")
+                self._emit_level(
+                    db,
+                    avg,
+                    speaking_now,
+                    silence_elapsed,
+                    phase="speaking",
+                )
                 if now - last_log >= 0.75:
                     state = "说话中" if speaking_now else "静音计时"
                     self._log("[Client-VAD] [SPEAKING] %.1f/%.1fdB｜%s" % (db, avg, state))
@@ -404,18 +495,16 @@ class AudioPlaybackMonitor:
                     silence_started = None
                 elif silence_started is None:
                     silence_started = now
-                    self._log("[Client-VAD] 进入静音，开始 %.1fs 结束确认。" % self.silence_hold_sec)
-                elif now - silence_started >= self.silence_hold_sec:
+                    self._log(
+                        "[Client-VAD] 进入静音，开始 %.1fs 结束确认。"
+                        % self.active_silence_hold_sec
+                    )
+                elif now - silence_started >= self.active_silence_hold_sec:
                     self._log(
                         "[Client-VAD] ✅ 状态[→ENDED]：连续静音 %.1fs，放行下一句。"
                         % (now - silence_started)
                     )
                     return VAD_ENDED
-            self._log(
-                "[Client-VAD] ⚠ 单句超过 %.1fs 硬上限，强制结束本轮。"
-                % max_speech_timeout_sec
-            )
-            return VAD_SPEECH_TIMEOUT
         finally:
             if close_on_finish:
                 self.close()

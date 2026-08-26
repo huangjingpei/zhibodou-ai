@@ -8,7 +8,7 @@ import queue
 # 1. 异步消息与弹幕通信队列 (修复核心报错)
 # ==============================================================================
 msg_queue = queue.Queue()     # 异步消息与日志队列
-danmu_queue = queue.Queue()   # 弹幕捕获队列
+danmu_queue = queue.Queue(maxsize=2000)  # 有界弹幕队列，防止高峰期无限占用内存
 
 # ==============================================================================
 # 2. 系统总电源与认证状态
@@ -35,6 +35,12 @@ screenshot_thread = None      # 屏幕捕获后台守护线程
 danmu_running = False         # 弹幕捕获模块运行状态
 danmu_thread = None           # 弹幕捕获后台守护线程
 last_danmu_text = ""          # 最近一条互动的弹幕内容
+danmu_collector = None         # Playwright 采集器实例（由采集线程持有）
+danmu_generation = 0           # 防止旧采集线程覆盖快速重启后的新状态
+online_num = 0
+like_cnt = 0
+gift_cnt = 0
+comment_cnt = 0
 
 # ==============================================================================
 # 5. 直播播控与话术轮播状态机

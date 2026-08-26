@@ -142,7 +142,7 @@ public class DoubaoAccessibilityService extends AccessibilityService {
                 if (line.contains("/ping")) {
                     action = "ping";
                 } else if (line.contains("/inject_and_send") || line.contains("/set_text")) {
-                    action = "inject_and_send";
+                    action = line.contains("/inject_and_send") ? "inject_and_send" : "set_text";
                     // 尝试从 URL 提取 text 参数
                     if (line.contains("text=")) {
                         String part = line.substring(line.indexOf("text=") + 5);
@@ -179,6 +179,10 @@ public class DoubaoAccessibilityService extends AccessibilityService {
                 boolean ok = performInjectAndSend(injectText);
                 resp.put("code", ok ? 0 : -1);
                 resp.put("msg", ok ? "success" : "failed (check if Doubao is in foreground)");
+            } else if ("set_text".equals(action)) {
+                boolean ok = performSetText(injectText);
+                resp.put("code", ok ? 0 : -1);
+                resp.put("msg", ok ? "success" : "failed");
             } else if ("clear".equals(action)) {
                 Log.i(TAG, "正在执行清空输入框");
                 boolean ok = performClear();
@@ -216,6 +220,10 @@ public class DoubaoAccessibilityService extends AccessibilityService {
             // 检测是否在豆包 App 中
             CharSequence pkg = root.getPackageName();
             Log.d(TAG, "当前前台包名: " + pkg);
+            if (pkg == null || !"com.larus.nova".contentEquals(pkg)) {
+                Log.e(TAG, "当前前台不是豆包，拒绝注入和猜测点击");
+                return false;
+            }
 
             AccessibilityNodeInfo input = findInputNode(root);
             if (input == null) {
@@ -244,7 +252,25 @@ public class DoubaoAccessibilityService extends AccessibilityService {
                     newRoot.recycle();
                 }
             }
-            return setOk;
+            Log.e(TAG, "文本已注入但未找到发送按钮，拒绝猜测右下角坐标");
+            return false;
+        } finally {
+            root.recycle();
+        }
+    }
+
+    private synchronized boolean performSetText(String text) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null || root.getPackageName() == null ||
+                !"com.larus.nova".contentEquals(root.getPackageName())) return false;
+        try {
+            AccessibilityNodeInfo input = findInputNode(root);
+            if (input == null) return false;
+            Bundle args = new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+            boolean ok = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+            input.recycle();
+            return ok;
         } finally {
             root.recycle();
         }
@@ -288,12 +314,15 @@ public class DoubaoAccessibilityService extends AccessibilityService {
     }
 
     private AccessibilityNodeInfo findSendButton(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> byId = root.findAccessibilityNodeInfosByViewId(
+                "com.larus.nova:id/action_send");
+        if (byId != null && !byId.isEmpty()) {
+            AccessibilityNodeInfo found = AccessibilityNodeInfo.obtain(byId.get(0));
+            for (AccessibilityNodeInfo node : byId) node.recycle();
+            return found;
+        }
         List<AccessibilityNodeInfo> clickables = new ArrayList<>();
         collectClickableNodes(root, clickables);
-        
-        Rect rect = new Rect();
-        AccessibilityNodeInfo fallback = null;
-        int maxScore = -1;
 
         for (AccessibilityNodeInfo n : clickables) {
             String desc = String.valueOf(n.getContentDescription());
@@ -304,19 +333,9 @@ public class DoubaoAccessibilityService extends AccessibilityService {
                 return n;
             }
             
-            n.getBoundsInScreen(rect);
-            if (rect.left > mScreenWidth * 0.6 && rect.top > mScreenHeight * 0.6) {
-                int score = rect.left + rect.top;
-                if (score > maxScore) {
-                    if (fallback != null) fallback.recycle();
-                    maxScore = score;
-                    fallback = n;
-                    continue;
-                }
-            }
             n.recycle();
         }
-        return fallback;
+        return null;
     }
 
     private void collectNodesByClass(AccessibilityNodeInfo node, String clazz, List<AccessibilityNodeInfo> out) {

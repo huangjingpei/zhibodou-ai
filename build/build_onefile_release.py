@@ -13,15 +13,35 @@ import PyInstaller.__main__
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根 E:\zhibodou-ai\zhibodou
 SRC = os.path.join(ROOT, "src")
+RTH = os.path.join(ROOT, "build", "rth_asyncio.py")
+
+# asyncio 子模块（playwright 依赖）。PyInstaller 冻结后 asyncio.__init__ 里
+# `from .base_events import *` 不会把子模块名绑定回包命名空间，导致
+# `NameError: name 'base_events' is not defined`，弹幕/浏览器采集启动即崩。
+ASYNCIO_HIDDEN = [
+    "asyncio", "asyncio.base_events", "asyncio.constants", "asyncio.coroutines",
+    "asyncio.events", "asyncio.exceptions", "asyncio.futures", "asyncio.locks",
+    "asyncio.log", "asyncio.proactor_events", "asyncio.protocols", "asyncio.queues",
+    "asyncio.runners", "asyncio.selector_events", "asyncio.sslproto",
+    "asyncio.staggered", "asyncio.streams", "asyncio.subprocess", "asyncio.tasks",
+    "asyncio.taskgroups", "asyncio.timeouts", "asyncio.transports", "asyncio.trsock",
+    "asyncio.unix_events", "asyncio.windows_events", "asyncio.windows_selector_events",
+    "asyncio.windows_utils",
+]
 
 PyInstaller.__main__.run([
     "--onefile",
     "--noconsole",               # 交付版：无黑窗口
     "--name", "zhibodou",
     "--paths", SRC,
+    "--runtime-hook", RTH,
     "--add-data", os.path.join(ROOT, "scrcpy") + ";" + "scrcpy",
     "--add-data", os.path.join(ROOT, "apk") + ";" + "apk",
-    "--hidden-import", "pyautogui",
+    "--hidden-import", "playwright",
+    "--hidden-import", "playwright.sync_api",
+    "--hidden-import", "playwright._impl",
+    "--hidden-import", "greenlet",
+] + [item for m in ASYNCIO_HIDDEN for item in ("--hidden-import", m)] + [
     "--hidden-import", "pyscreeze",
     "--hidden-import", "pygetwindow",
     "--hidden-import", "pyperclip",

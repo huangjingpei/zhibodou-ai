@@ -15,6 +15,10 @@ def on_closing():
     except Exception:
         pass
     try:
+        danmu.stop_danmu_capture()
+    except Exception:
+        pass
+    try:
         scrcpy_embed.stop_scrcpy_embed()
     except Exception:
         pass
@@ -23,6 +27,7 @@ def on_closing():
 
 def main():
     ui.build_ui()
+    danmu.initialize_ui_pump()
 
     # ---- 接线全部核心按钮回调 ----
     ui.btn_power.config(command=power.toggle_power)
@@ -31,6 +36,7 @@ def main():
     ui.btn_live_stop.config(command=live.stop_live)
     ui.btn_audio_mode.config(command=live.toggle_audio_mode)
     ui.btn_cap.config(command=capture.start_capture)
+    ui.btn_danmu.config(command=danmu.toggle_danmu_capture)
     ui.btn_save.config(command=config.save_config)
     ui.btn_pwd.config(command=dialogs.dialog_modify_pwd)
     ui.btn_auth.config(command=dialogs.dialog_auth_mgr)

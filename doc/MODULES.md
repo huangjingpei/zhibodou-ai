@@ -38,7 +38,8 @@ src/
 │   ├── win_embed.py         # Windows 原生 API：嵌入 scrcpy 窗口并锁死样式
 │   ├── scrcpy_embed.py      # scrcpy 子进程启停、窗口嵌入（视频低码率/低帧率 + 音频低延迟 PCM；分级回退防单参数不兼容）
 │   ├── capture.py           # 定时截图抓屏 + 日志刷新
-│   └── danmu.py             # 弹幕/礼物/点赞解析 + WebSocket 接收循环
+│   └── danmu.py             # Playwright 采集器桥接 + 有界队列 + Tk 主线程更新
+├── danma/                   # 各直播平台网页监听与协议解析器
 ├── broadcast/               # 直播业务
 │   ├── live.py              # 开播预演、区间话术循环、音频模式、启停
 │   └── power.py             # 总电源开关 + 开机自检
@@ -64,7 +65,8 @@ src/
 | `device/doubao_check.py` | device | **豆包就绪体检（发送前置检测）** | `check_doubao_ready()` `doubao_installed()` `doubao_running()` `in_conversation_screen()` `is_occluded()` `can_send()` |
 | `device/wake_unlock.py` | device | 灭屏/锁屏检测 + 亮屏拉起豆包 | `is_screen_off()` `is_keyguard_locked()` `wake_screen()` `launch_doubao()` `enter_first_conversation()` `ensure_doubao_awake_and_foreground()` |
 | `screen/scrcpy_embed.py` | screen | scrcpy 启停与嵌入 | `start_scrcpy_embed()` `lock_scrcpy_loop()` `stop_scrcpy_embed()` |
-| `screen/danmu.py` | screen | 弹幕解析 + WS 接收 | `parse_danmu()` `ws_danmu_loop()` |
+| `screen/danmu.py` | screen | 采集器生命周期、进程内队列、GUI/状态更新 | `start_danmu_capture()` `stop_danmu_capture()` `process_message()` |
+| `danma/main.py` | danma | Playwright HTTP/WebSocket 监听、平台解析器分发 | `DanmuBrowserCollector` |
 | `screen/capture.py` | screen | 定时截图抓屏 | `screen_capture_loop()` `start_capture()` `stop_capture()` |
 | `audio/tts.py` | audio | TTS 播报 | `speak_text()` |
 | `audio/vad.py` | audio | VAD 监听豆包语流，驱动下一轮 | `AudioPlaybackMonitor` `list_audio_input_devices()` `quick_probe()` |
@@ -132,7 +134,7 @@ screen.win_embed    ── (ctypes / pygetwindow)
 4. `device.ui_locator.tap_send_button()` 控件定位点击发送，并做「发送后验证 + 自动重试」。
 
 ### 4.4 自动直播循环
-`broadcast.live.start_live()` → 起 `ws_danmu_loop()`（弹幕）+ `auto_live_loop()`（按区间 1→2→3 循环调 `send_script_content`）+ `screen.capture.start_capture()`；每次发送后 `count_down_work()` 倒计时，结束才解除 `can_next_speak` 节流锁。
+`broadcast.live.start_live()` → 起 `start_danmu_capture()`（Playwright 后台采集，结果经进程内队列进入 GUI）+ `auto_live_loop()`（按区间 1→2→3 循环调 `send_script_content`）+ `screen.capture.start_capture()`；话术切换由 VAD 状态机放行。停止直播、关机或退出客户端都会停止弹幕采集器。
 
 ### 4.5 VAD 音频源选择与 OBS 路由
 VAD（`audio/vad.py`）只读旁听电脑本地音频【输入】设备，判断豆包是否在说话，**不改原始音频数据**。
