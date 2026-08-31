@@ -5,7 +5,7 @@ import time
 import tkinter as tk
 import pyautogui
 from core import state
-from gui import ui
+from gui import theme, ui
 def screen_capture_loop():
     """抓屏循环：每秒截一次，写入消息队列。"""
     while state.screenshot_working and state.system_power:
@@ -38,11 +38,11 @@ def start_capture():
     state.screenshot_working = True
     threading.Thread(target=screen_capture_loop, daemon=True).start()
     ui.root.after(100, ui_refresh_msg)
-    ui.lab_cap_status.config(text="抓屏：运行中 🟢", fg="#34d399")
+    ui.lab_cap_status.config(text="抓屏 · 运行中", fg=theme.GREEN)
 
 
 def stop_capture():
     """停止抓屏并清空日志。"""
     state.screenshot_working = False
-    ui.lab_cap_status.config(text="抓屏：已停止 ⏸️", fg="#fbbf24")
+    ui.lab_cap_status.config(text="抓屏 · 已停止", fg=theme.AMBER)
     ui.txt_screen_log.delete(1.0, tk.END)

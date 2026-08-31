@@ -3,7 +3,7 @@ import tkinter as tk
 import tkinter.messagebox as messagebox
 
 from core import state
-from gui import ui
+from gui import theme, ui
 from device.input_text import send_text_to_doubao
 from audio.vad import (
     AudioPlaybackMonitor,
@@ -112,9 +112,9 @@ def toggle_audio_mode():
     inner_audio_mode = not inner_audio_mode
     if ui.btn_audio_mode:
         if inner_audio_mode:
-            ui.btn_audio_mode.config(text="🔇内录模式(剪贴板)", bg="#333333", fg="white")
+            ui.btn_audio_mode.config(text="内录模式 · 剪贴板", bg=theme.SURFACE_SOFT, fg=theme.TEXT)
         else:
-            ui.btn_audio_mode.config(text="🔊外音模式(TTS语音)", bg="#06d6a0", fg="black")
+            ui.btn_audio_mode.config(text="外音模式 · TTS", bg="#176F66", fg=theme.TEXT)
 
 def send_script_content(text: str):
     global can_next_speak, _current_monitor

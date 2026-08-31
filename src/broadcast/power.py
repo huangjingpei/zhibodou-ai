@@ -5,7 +5,7 @@ import tkinter as tk
 import tkinter.messagebox as messagebox
 import winsound
 from core import state
-from gui import ui
+from gui import theme, ui
 from device import adb_utils
 from device import input_text
 from screen import scrcpy_embed
@@ -84,9 +84,9 @@ def toggle_power():
             AudioPlaybackMonitor.quick_probe(log_fn=ui.log_screen)
         except Exception as e:
             ui.log_screen("【开机】VAD 自检异常：%s" % e)
-        ui.btn_power.config(bg="#00aa44")
+        ui.btn_power.config(bg="#23865F", activebackground=theme.GREEN)
         winsound.Beep(1000, 120)
-        ui.lab_sys_status.config(text="状态：待机【测试】✅", fg="#34d399")
+        ui.lab_sys_status.config(text="系统在线 · 待机", fg=theme.GREEN)
         ui.btn_meet.config(state=tk.NORMAL)
         ui.btn_live_start.config(state=tk.NORMAL)
         ui.btn_audio_mode.config(state=tk.NORMAL)
@@ -112,9 +112,9 @@ def toggle_power():
         danmu.stop_danmu_capture()
         scrcpy_embed.stop_scrcpy_embed()
         capture.stop_capture()
-        ui.btn_power.config(bg="#bb2222")
+        ui.btn_power.config(bg=theme.RED_DARK, activebackground=theme.RED)
         winsound.Beep(600, 120)
-        ui.lab_sys_status.config(text="状态：已关机 ❌", fg="#ef4444")
+        ui.lab_sys_status.config(text="系统离线 · 已关机", fg=theme.RED)
         ui.btn_meet.config(state=tk.DISABLED)
         ui.btn_live_start.config(state=tk.DISABLED)
         ui.btn_live_stop.config(state=tk.DISABLED)

@@ -19,8 +19,12 @@ def get_machine_code():
 
 
 def check_machine_auth():
-    """当前测试版：恒为通过。"""
-    return True
+    """PDK 会话、业务状态和许可证均校验成功后才通过。"""
+    try:
+        from pdk import auth_service
+        return auth_service.is_authenticated()
+    except Exception:
+        return False
 
 
 def save_machine_bind():
@@ -38,8 +42,8 @@ def get_auth_remain_sec():
 
 
 def check_cannot_power_on():
-    """是否禁止开机（授权异常时）。当前恒为 False。"""
-    return False
+    """没有有效 PDK 登录态时禁止启动直播链路。"""
+    return not check_machine_auth()
 
 
 def init_admin_password():

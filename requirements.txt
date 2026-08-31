@@ -10,3 +10,5 @@ pyaudio>=0.2.14           # 本地音频采集（VAD 语音活动检测：判断
 playwright>=1.49,<2       # 弹幕采集；支持 headless 与持久化登录态
 protobuf>=4.25,<8        # 抖音/快手/TikTok/PDD 二进制消息解析
 brotli>=1.1              # Bilibili WebSocket 压缩帧
+requests>=2.32,<3        # PDK 商业化平台 HTTP 客户端
+cryptography>=44,<51     # PDK RSA/AES-GCM 协议信封加解密

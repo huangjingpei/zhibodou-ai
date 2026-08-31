@@ -14,7 +14,7 @@ danmu_queue = queue.Queue(maxsize=2000)  # 有界弹幕队列，防止高峰期�
 # 2. 系统总电源与认证状态
 # ==============================================================================
 system_power = False          # 系统开机/总电源状态 (True: 已开机, False: 关机)
-auth_passed = True            # 授权激活认证状态 (True: 已激活)
+auth_passed = False           # PDK 会话及业务授权校验通过后才设为 True
 device_serial = None          # 当前选中的 ADB 手机序列号
 device_connected = False      # 手机 ADB 是否处于 online 连接状态
 start_time = None             # 开机启动时间戳 (用于计算运行计时)

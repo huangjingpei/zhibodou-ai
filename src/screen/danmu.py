@@ -13,7 +13,7 @@ import tkinter as tk
 from typing import Iterable
 
 from core import state
-from gui import ui
+from gui import theme, ui
 from settings import config
 
 _UI_POLL_MS = 100
@@ -64,9 +64,10 @@ def _set_capture_ui(text, color="#9ca3af", running=None):
         ui.lab_danmu_status.config(text=f"💬弹幕：{text}", fg=color)
     if ui.btn_danmu is not None and running is not None:
         if running:
-            ui.btn_danmu.config(text="⏹停止弹幕", bg="#b45309")
+            ui.btn_danmu.config(text="停止弹幕", bg="#9A6226", activebackground=theme.AMBER)
         else:
-            ui.btn_danmu.config(text="▶启动弹幕", bg="#0e7490")
+            ui.btn_danmu.config(text="启动弹幕", bg=theme.PRIMARY,
+                                activebackground=theme.PRIMARY_HOVER)
 
 
 def _append_danmu(name, content, event=""):
