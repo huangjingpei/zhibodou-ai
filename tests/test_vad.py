@@ -9,6 +9,7 @@ if SRC not in sys.path:
 
 from audio.vad import (  # noqa: E402
     AudioPlaybackMonitor,
+    _WindowsRenderPeakMeter,
     VAD_AUDIO_ERROR,
     VAD_CANCELLED,
     VAD_ENDED,
@@ -57,6 +58,22 @@ class FakeMonitor(AudioPlaybackMonitor):
 
 
 class VadStateMachineTests(unittest.TestCase):
+    def test_windows_linear_peak_is_converted_to_db(self):
+        self.assertAlmostEqual(-20.0, _WindowsRenderPeakMeter._linear_peak_to_db(0.1))
+        self.assertEqual(-100.0, _WindowsRenderPeakMeter._linear_peak_to_db(0.0))
+
+    def test_digital_loopback_prefers_default_mme_over_wasapi(self):
+        class FakePyAudio:
+            @staticmethod
+            def get_host_api_info_by_index(index):
+                return {"name": {0: "MME", 1: "Windows WASAPI"}[index]}
+
+        mon = AudioPlaybackMonitor.__new__(AudioPlaybackMonitor)
+        mon._pa = FakePyAudio()
+        mme = {"index": 1, "name": "CABLE Output", "hostApi": 0}
+        wasapi = {"index": 21, "name": "CABLE Output", "hostApi": 1}
+        self.assertLess(mon._device_rank(mme, 1), mon._device_rank(wasapi, 1))
+
     def test_weighted_db_uses_previous_five_eighths(self):
         value = AudioPlaybackMonitor._weighted_db(-50.0, -42.0)
         self.assertAlmostEqual(-47.0, value)
@@ -88,6 +105,13 @@ class VadStateMachineTests(unittest.TestCase):
         # 手机/虚拟声卡会在有效 PCM 块之间插入空帧；有效语音无需逐帧连续。
         packetized_speech = ([-18.0] * 2 + [-100.0] * 3) * 8
         mon = FakeMonitor(packetized_speech + [-100.0] * 30)
+        result = mon.wait_for_doubao_speech_cycle(2.0)
+        self.assertEqual(VAD_ENDED, result)
+
+    def test_sparse_strong_digital_frame_can_enter_speaking(self):
+        # 某些 VB-CABLE Host API 会把连续语音拆成强音频块和大量空帧。
+        levels = [-100.0] * 20 + [-10.0] + [-100.0] * 30
+        mon = FakeMonitor(levels)
         result = mon.wait_for_doubao_speech_cycle(2.0)
         self.assertEqual(VAD_ENDED, result)
 
@@ -135,6 +159,13 @@ class VadStateMachineTests(unittest.TestCase):
         mon = FakeMonitor([-15.0] * 25 + [-60.0] * 40)
         self.assertTrue(mon.calibrate_idle(0.4, max_wait_sec=2.0))
         self.assertGreater(mon._now, 0.4)
+        self.assertAlmostEqual(-60.0, mon.idle_floor_db)
+
+    def test_digital_calibration_has_no_fixed_wait_limit(self):
+        # 先模拟 3 秒仍有上一段音频；无限等待必须继续，直到真正静音才通过。
+        mon = FakeMonitor([-15.0] * 150 + [-60.0] * 40)
+        self.assertTrue(mon.calibrate_idle(0.4, max_wait_sec=None))
+        self.assertGreater(mon._now, 3.0)
         self.assertAlmostEqual(-60.0, mon.idle_floor_db)
 
     def test_microphone_calibration_uses_relative_noise_floor(self):

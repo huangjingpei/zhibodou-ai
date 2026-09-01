@@ -20,6 +20,7 @@ _UI_POLL_MS = 100
 _UI_BATCH_SIZE = 100
 _MAX_UI_LINES = 1000
 _ui_pump_started = False
+_ui_after_id = None
 _lifecycle_lock = threading.Lock()
 
 
@@ -60,6 +61,8 @@ def _set_label(widget, text):
 
 
 def _set_capture_ui(text, color="#9ca3af", running=None):
+    if ui.is_shutting_down():
+        return
     if ui.lab_danmu_status is not None:
         ui.lab_danmu_status.config(text=f"💬弹幕：{text}", fg=color)
     if ui.btn_danmu is not None and running is not None:
@@ -138,6 +141,10 @@ def process_message(message: dict):
 
 
 def _drain_ui_queue():
+    global _ui_after_id
+    if ui.is_shutting_down():
+        _ui_after_id = None
+        return
     for _ in range(_UI_BATCH_SIZE):
         try:
             message = state.danmu_queue.get_nowait()
@@ -149,18 +156,31 @@ def _drain_ui_queue():
             ui.log_screen(f"【弹幕采集】消息处理失败：{exc}")
     try:
         if ui.root and ui.root.winfo_exists():
-            ui.root.after(_UI_POLL_MS, _drain_ui_queue)
+            _ui_after_id = ui.root.after(_UI_POLL_MS, _drain_ui_queue)
     except tk.TclError:
-        pass
+        _ui_after_id = None
 
 
 def initialize_ui_pump():
     """必须从 Tk 主线程调用一次。"""
-    global _ui_pump_started
+    global _ui_pump_started, _ui_after_id
     if _ui_pump_started or ui.root is None:
         return
     _ui_pump_started = True
-    ui.root.after(_UI_POLL_MS, _drain_ui_queue)
+    _ui_after_id = ui.root.after(_UI_POLL_MS, _drain_ui_queue)
+
+
+def shutdown_ui_pump():
+    """退出/重新登录前取消弹幕队列轮询，并允许下一窗口重新初始化。"""
+    global _ui_pump_started, _ui_after_id
+    after_id = _ui_after_id
+    _ui_after_id = None
+    _ui_pump_started = False
+    if after_id and ui.root is not None:
+        try:
+            ui.root.after_cancel(after_id)
+        except (tk.TclError, ValueError):
+            pass
 
 
 def _collector_worker(options, generation):

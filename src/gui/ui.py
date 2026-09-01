@@ -62,10 +62,42 @@ _volume_lock = threading.Lock()
 _volume_latest = None
 _volume_peak_db = -100.0
 _volume_poll_started = False
+_volume_after_id = None
+_shutting_down = False
+
+
+def is_shutting_down() -> bool:
+    return _shutting_down
+
+
+def begin_shutdown():
+    """停止 UI 调度并取消当前 Tk 根窗口的全部 after/idle 回调。"""
+    global _shutting_down, _volume_poll_started, _volume_after_id, _volume_latest
+    _shutting_down = True
+    _volume_poll_started = False
+    _volume_after_id = None
+    with _volume_lock:
+        _volume_latest = None
+    current_root = root
+    if current_root is None:
+        return
+    try:
+        pending = current_root.tk.call("after", "info")
+        if isinstance(pending, str):
+            pending = (pending,)
+        for after_id in tuple(pending or ()):
+            try:
+                current_root.after_cancel(after_id)
+            except (tk.TclError, ValueError):
+                pass
+    except tk.TclError:
+        pass
 
 
 def set_status(msg, color=theme.RED):
     """线程安全更新主界面状态；GUI 未就绪时退化为控制台日志。"""
+    if _shutting_down:
+        return
     try:
         root.after(0, lambda: lab_sys_status.config(text=msg, fg=color))
     except Exception:
@@ -74,6 +106,8 @@ def set_status(msg, color=theme.RED):
 
 def log_screen(msg):
     """线程安全追加运行日志，并同步回显到控制台。"""
+    if _shutting_down:
+        return
     try:
         print(msg)
     except Exception:
@@ -91,6 +125,8 @@ def set_volume_meter(db, avg=None, speaking=False, silence_elapsed=None,
                      silence_hold=None, phase="monitor"):
     """保存最新 VAD 帧；实际绘制在 Tk 主线程完成。"""
     global _volume_latest
+    if _shutting_down:
+        return
     try:
         payload = {
             "db": float(db),
@@ -101,6 +137,14 @@ def set_volume_meter(db, avg=None, speaking=False, silence_elapsed=None,
             "phase": phase,
         }
         with _volume_lock:
+            # CABLE 的有效 PCM 可能只持续一个 20ms 帧，而 UI 每 50ms 刷新一次。
+            # 若直接覆盖“最新值”，强音频帧会被紧随其后的 -100dB 空帧抹掉，
+            # 状态机已经听到声音但界面仍显示静音。合并刷新周期内的峰值即可避免。
+            previous = _volume_latest if isinstance(_volume_latest, dict) else None
+            if previous and previous.get("phase") == payload["phase"]:
+                payload["db"] = max(previous["db"], payload["db"])
+                payload["avg"] = max(previous["avg"], payload["avg"])
+                payload["speaking"] = previous["speaking"] or payload["speaking"]
             _volume_latest = payload
     except (TypeError, ValueError):
         return
@@ -121,7 +165,10 @@ def _draw_meter_fill(width, color):
 
 def _poll_volume_meter():
     """合并 VAD 帧，并用峰值缓降让短语音清晰可见。"""
-    global _volume_latest, _volume_peak_db
+    global _volume_latest, _volume_peak_db, _volume_after_id
+    if _shutting_down:
+        _volume_after_id = None
+        return
     try:
         with _volume_lock:
             payload = _volume_latest
@@ -169,14 +216,16 @@ def _poll_volume_meter():
         print("[Client-VAD] 音量表刷新失败:", exc)
     finally:
         try:
-            if root and root.winfo_exists():
-                root.after(50, _poll_volume_meter)
+            if not _shutting_down and root and root.winfo_exists():
+                _volume_after_id = root.after(50, _poll_volume_meter)
         except tk.TclError:
             pass
 
 
 def reset_volume_meter():
     global _volume_latest
+    if _shutting_down:
+        return
     with _volume_lock:
         _volume_latest = "reset"
 
@@ -205,10 +254,13 @@ def build_ui():
     global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_audio_mode, btn_cap
     global btn_pwd, btn_auth, btn_save, btn_danmu, btn_logout
     global cmb_danmu_platform, ent_danmu_url, var_danmu_headless
-    global volume_canvas, lab_vad_state, _volume_poll_started
+    global volume_canvas, lab_vad_state, _volume_poll_started, _volume_after_id, _shutting_down
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
 
+    _shutting_down = False
+    _volume_poll_started = False
+    _volume_after_id = None
     root = tk.Tk()
     root.title("智播豆 · AI 智能直播工作台")
     root.geometry("1280x800")
@@ -413,7 +465,7 @@ def build_ui():
     root.after_idle(lambda: _draw_meter_fill(0, theme.TEXT_FAINT))
     if not _volume_poll_started:
         _volume_poll_started = True
-        root.after(50, _poll_volume_meter)
+        _volume_after_id = root.after(50, _poll_volume_meter)
 
     bottom = tk.Frame(ui_right, bg=theme.BG)
     bottom.pack(fill=tk.BOTH, expand=True)

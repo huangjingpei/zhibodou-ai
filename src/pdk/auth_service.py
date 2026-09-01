@@ -224,6 +224,8 @@ def logout() -> None:
         if client.is_logged_in:
             # 退出应用不能因服务端不可达卡住 20 秒。
             client.timeout = (2, 5)
+            # 注销是正常生命周期事件，不向用户控制台输出一条调试 HTTP 日志。
+            client.on_http = None
             client.logout()
     finally:
         client.clear_session()

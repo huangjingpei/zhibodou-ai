@@ -30,7 +30,7 @@
     "tb": "https://liveplatform.taobao.com/restful/index/live/list",
     "xhs": "https://redlive.xiaohongshu.com/live_center_control"
   },
-  "vad_silence_hold_sec": 2.0,
+  "vad_silence_hold_sec": 4.0,
   "vad_wait_start_sec": 15.0,
   "vad_speak_confirm_sec": 0.3,
   "vad_input_device": "CABLE Output",

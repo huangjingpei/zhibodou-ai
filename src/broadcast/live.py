@@ -149,8 +149,14 @@ def send_script_content(text: str):
             monitor.close()
             return
         _current_monitor = monitor
+    # 数字回环完全由 CABLE 的真实音频状态决定：上一段仍在播放就持续等待，
+    # 不再用 6 秒固定上限停止直播。实体麦克风仍保留有限校准窗口，避免环境
+    # 常驻噪声造成无法退出的等待。
+    calibration_wait = (
+        None if monitor._uses_digital_loopback() else vad_cfg["calibration_wait"]
+    )
     if not monitor.is_ready or not monitor.calibrate_idle(
-        vad_cfg["calibration"], stop_event, vad_cfg["calibration_wait"]
+        vad_cfg["calibration"], stop_event, calibration_wait
     ):
         monitor.close()
         with _round_lock:

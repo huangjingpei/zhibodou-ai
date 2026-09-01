@@ -63,11 +63,11 @@ DEFAULT_CFG = {
     # CABLE Input，VAD 从 CABLE Output 采集。不得因更换手机而静默改成实体麦克风。
     "vad_input_device": "CABLE Output",
     # VAD 静音跳句时序（单位：秒）—— 话术切换【完全由 VAD 静音时长决定】，不再使用 script_interval 倒计时：
-    #   · vad_silence_hold_sec  —— 豆包说完后，连续静音超过此值(默认 2.0s)即判定"说完了"，立即切入下一轮；
+    #   · vad_silence_hold_sec  —— 豆包说完后，连续静音超过此值(默认 4.0s)即判定"说完了"，立即切入下一轮；
     #   · vad_wait_start_sec    —— 【发消息后的思考等待上限】(默认 15.0s)：豆包生成/思考期可能数秒无语音，
     #                               此值要足够大，避免"思考期"被误判为"播报结束"；超时会安全停播，不会切下一句；
     #   · vad_speak_confirm_sec —— 进入"说话"态需连续有语音确认时长(默认 0.3s)：消抖，防单帧提示音/发送杂音误触发 SPEAKING；
-    "vad_silence_hold_sec": 2.0,
+    "vad_silence_hold_sec": 4.0,
     "vad_wait_start_sec": 15.0,
     "vad_speak_confirm_sec": 0.3,
     # 能量判定参数。实际开始阈值会取“此下限”和“静音底噪+余量”中的较高值；
@@ -76,6 +76,7 @@ DEFAULT_CFG = {
     "vad_noise_margin_db": 6.0,
     "vad_end_hysteresis_db": 3.0,
     "vad_calibration_sec": 0.8,
+    # 仅实体麦克风使用；CABLE 数字回环会一直等到真正静音或用户取消。
     "vad_calibration_wait_sec": 6.0,
     # scrcpy 把手机音频送出的【电脑输出设备】。
     # 作用：让 scrcpy 经 SDL2 的 SDL_AUDIO_DEVICE_NAME 把声音定向到虚拟音频线的「输入」端，

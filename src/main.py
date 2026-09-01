@@ -17,11 +17,30 @@ from pdk import auth_service as pdk_auth
 from gui import login as login_ui
 
 APP_VERSION = "1.7.0"
+_logout_in_progress = False
+
+
+def _cancel_tk_callbacks(tk_root):
+    """在 destroy 前移除 Tcl after/idle 脚本，避免退出后执行失效命令。"""
+    if tk_root is None:
+        return
+    try:
+        pending = tk_root.tk.call("after", "info")
+        if isinstance(pending, str):
+            pending = (pending,)
+        for after_id in tuple(pending or ()):
+            try:
+                tk_root.after_cancel(after_id)
+            except (tk.TclError, ValueError):
+                pass
+    except tk.TclError:
+        pass
 
 
 def _enter_main(login_root):
     """登录成功后销毁登录窗口、构建并展示主窗口；在这里才 import 重型业务模块。"""
     try:
+        _cancel_tk_callbacks(login_root)
         login_root.destroy()
     except Exception:
         pass
@@ -63,20 +82,40 @@ def _enter_main(login_root):
 
 def _do_logout(exit_on_close=False):
     """退出登录（或关闭窗口）：清理后台线程 / 资源 → 销毁主窗口 → 重启登录。"""
+    global _logout_in_progress
+    if _logout_in_progress:
+        return
+    _logout_in_progress = True
+
+    try:
+        from gui import ui
+        # 第一时间阻止后台线程继续投递 Tk 回调，并取消已排队的 after 脚本。
+        ui.begin_shutdown()
+    except Exception:
+        ui = None
+
     # 清理后台资源（容忍失败）
+    try:
+        from core import state
+        state.is_broadcasting = False
+        state.system_power = False
+        state.screenshot_working = False
+    except Exception:
+        pass
     try:
         from broadcast import live
         live.cancel_active_vad()
     except Exception:
         pass
     try:
-        from core import state
-        state.is_broadcasting = False
+        from screen import capture
+        capture.shutdown_ui_refresh()
     except Exception:
         pass
     try:
         from screen import danmu
         danmu.stop_danmu_capture()
+        danmu.shutdown_ui_pump()
     except Exception:
         pass
     try:
@@ -97,17 +136,20 @@ def _do_logout(exit_on_close=False):
 
     # 销毁主窗口
     try:
-        from gui import ui
-        if ui.root:
+        if ui is not None and ui.root:
+            # 后台清理期间可能又有模块尝试安排回调，销毁前再兜底取消一次。
+            ui.begin_shutdown()
             ui.root.destroy()
     except Exception:
         pass
 
     if exit_on_close:
         # 用户主动关掉主窗口 → 整个进程退出，不再回登录
+        _logout_in_progress = False
         return
 
     # 回到登录界面
+    _logout_in_progress = False
     main()
 
 
@@ -122,6 +164,7 @@ def main():
     def _on_login_close():
         # 用户直接关闭登录窗口：整个进程退出
         try:
+            _cancel_tk_callbacks(login_root)
             login_root.destroy()
         finally:
             sys.exit(0)
