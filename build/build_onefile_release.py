@@ -14,6 +14,10 @@ import PyInstaller.__main__
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根 E:\zhibodou-ai\zhibodou
 SRC = os.path.join(ROOT, "src")
 RTH = os.path.join(ROOT, "build", "rth_asyncio.py")
+# 交付版专属：注入生产 PDK 后端（https://pdk.graddu.com）。
+# debug/测试构建（build_onefile.py / build_console_debug.py）不挂此钩子，
+# 默认仍为 http://127.0.0.1:8080；环境变量 PDK_BASE_URL 优先级更高。
+RTH_PDK_RELEASE = os.path.join(ROOT, "build", "rth_pdk_release.py")
 
 # asyncio 子模块（playwright 依赖）。PyInstaller 冻结后 asyncio.__init__ 里
 # `from .base_events import *` 不会把子模块名绑定回包命名空间，导致
@@ -35,6 +39,7 @@ PyInstaller.__main__.run([
     "--name", "zhibodou",
     "--paths", SRC,
     "--runtime-hook", RTH,
+    "--runtime-hook", RTH_PDK_RELEASE,
     "--add-data", os.path.join(ROOT, "scrcpy") + ";" + "scrcpy",
     "--add-data", os.path.join(ROOT, "apk") + ";" + "apk",
     "--hidden-import", "playwright",
