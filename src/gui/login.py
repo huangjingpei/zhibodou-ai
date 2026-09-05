@@ -9,6 +9,7 @@ from tkinter import messagebox
 from gui import theme
 from pdk import auth_service as pdk_auth
 from pdk.pdk_client import PdkClientError
+from core.trial import trial_active, TRIAL_EXPIRE_DATE
 
 # ====================== 字体层级系统（Typography Scale） ======================
 # 目标：靠「字号 + 字重 + 颜色」三重梯度建立视觉层次，而不是各处随手写死数值。
@@ -117,7 +118,10 @@ class LoginWindow:
         self.tabs = {}               # tab_key -> {btn, frame}
         self.active_key = "login"
         self._underline_pos = None      # 下划线上次位置，用于防抖去重
-        self._remember_hint_var = tk.StringVar(value="登录状态仅保留在本次运行中")
+        # Trial 版提示：本地校验、无需联网（覆盖默认提示，优先级更高）
+        self._remember_hint_var = tk.StringVar(
+            value=("试用版模式：本地校验登录，无需连接服务器（有效期至 %04d-%02d-%02d）"
+                   % TRIAL_EXPIRE_DATE) if trial_active() else "登录状态仅保留在本次运行中")
         self._auth_busy = False
         # 每个 tab 的字段引用：{account_entry, password_entry, ...}
         self._login_fields  = {}
@@ -289,7 +293,8 @@ class LoginWindow:
         foot = tk.Frame(right, bg=CLR_BG, height=44)
         foot.pack(fill=tk.X, side=tk.BOTTOM)
         foot.pack_propagate(False)
-        tk.Label(foot, text="当前版本：%s" % CURRENT_VERSION,
+        tk.Label(foot, text=("试用版 · 本地模式｜当前版本：%s" if trial_active()
+                             else "当前版本：%s") % CURRENT_VERSION,
                  bg=CLR_BG, fg=CLR_TEXT_FAINT,
                  font=f(FS_SMALL)).pack(pady=10)
 
@@ -511,6 +516,9 @@ class LoginWindow:
             self._notice("请输入密码", error=True)
             return
         # 与 pdk_client.py::_demo 一致：若环境变量配置了卡密，普通登录也携带它。
+        # Trial 版：本地直接放行，不连接服务器。
+        if trial_active():
+            return self._trial_login(account)
         self._start_pdk_auth(account, password, os.getenv("PDK_CARD_KEY", "").strip())
 
     # ------------------------ 激活 tab ------------------------
@@ -544,7 +552,19 @@ class LoginWindow:
         if not key or key == "请输入卡密":
             self._notice("请输入卡密", error=True)
             return
+        # Trial 版：激活同样本地放行（无需真实卡密）
+        if trial_active():
+            return self._trial_login(account)
         self._start_pdk_auth(account, password, key)
+
+    def _trial_login(self, phone):
+        """Trial 版登录：本地建立试用会话，不连接任何服务器。"""
+        try:
+            result = pdk_auth.login_trial(phone)
+        except Exception as exc:
+            self._notice("本地试用登录失败：%s" % exc, error=True)
+            return
+        self._auth_succeeded(result)
 
     def _start_pdk_auth(self, phone, password, card_key=""):
         """后台执行 PDK 网络认证，所有 Tk 操作仍回到主线程。"""

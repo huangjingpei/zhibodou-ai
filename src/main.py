@@ -161,6 +161,20 @@ def main():
     login_root.resizable(False, False)
     login_root.configure(bg="#ffffff")
 
+    # Trial 试用期检查（纯本地时间判断，不连接服务器）：过期则禁止登录使用。
+    # 正式版发布时把 core/trial.py 中 TRIAL_ENABLED 改为 False 即可完全关闭。
+    from core.trial import trial_blocked
+    blocked_reason = trial_blocked()
+    if blocked_reason:
+        from tkinter import messagebox
+        messagebox.showerror("试用版已到期", blocked_reason, parent=login_root)
+        try:
+            _cancel_tk_callbacks(login_root)
+            login_root.destroy()
+        except Exception:
+            pass
+        return
+
     def _on_login_close():
         # 用户直接关闭登录窗口：整个进程退出
         try:
