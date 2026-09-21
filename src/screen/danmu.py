@@ -6,11 +6,75 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import queue
 import threading
 import time
 import tkinter as tk
+import traceback
+import sys
 from typing import Iterable
+
+
+def _install_isolated_shim() -> None:
+    """冻结态自修复：中和 PyInstaller.isolated 在冻结 exe 运行期抛出的
+    `function() argument 'code' must be code, not str` 崩溃。
+
+    根因：冻结后的 exe 会把 `PyInstaller.isolated.call` 误触发（部分库在导入/
+    运行期走到 isolated.call / @isolated.decorate），而冻结态下 func.__code__
+    经 marshal 往返解出 str 而非 code 对象，导致
+    PyInstaller/isolated/_child.py 的 `types.FunctionType(code, GLOBALS)` 抛 TypeError，
+    弹幕采集子线程直接“启动失败”。
+
+    该错误**只在冻结 exe(sys.frozen)出现**；源码 `python src/main.py` 下
+    `PyInstaller.isolated` 正常工作，不会触发。因此这里仅在 frozen 时注入一个
+    把 isolated.call 改为“当前进程内直接执行”的假模块，作为运行期兜底。
+    这样修复与打包脚本解耦：无论以后怎么打包，只要运行冻结 exe 就自带防护。
+    """
+    import types as _types
+    _fake = _types.ModuleType("PyInstaller.isolated")
+    _fake.__dict__["call"] = lambda function, *a, **k: function(*a, **k)
+    _fake.__dict__["decorate"] = lambda function: function
+
+    class _Python:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def call(self, function, *a, **k):
+            return function(*a, **k)
+
+    _fake.Python = _Python
+    _fake.isolated = _fake
+    sys.modules["PyInstaller.isolated"] = _fake
+    _pymod = sys.modules.get("PyInstaller")
+    if _pymod is not None:
+        try:
+            _pymod.isolated = _fake
+        except Exception:
+            pass
+
+
+# 运行于冻结 exe 时提前注入兜底，避免弹幕采集子线程崩溃。
+# 源码环境下 sys.frozen 不存在，此段完全不执行、不影响任何逻辑。
+if getattr(sys, "frozen", False):
+    _install_isolated_shim()
+
+
+def _dump_launch_traceback(exc: BaseException) -> None:
+    """把采集线程启动失败的完整 traceback 落到文件，便于排错（不再只有错误字符串）。"""
+    try:
+        tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        out_dir = os.path.dirname(os.path.abspath(__file__))
+        out_path = os.path.join(out_dir, "danmu_launch_err.log")
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+            f.write(tb_text)
+            f.write("\n")
+    except Exception:
+        pass
 
 from core import state
 from gui import theme, ui
@@ -220,6 +284,7 @@ def _collector_worker(options, generation):
                 time.sleep(0.2)
             retry_delay = min(30.0, retry_delay * 2.0)
     except Exception as exc:
+        _dump_launch_traceback(exc)
         enqueue_messages({"type": "SystemMessage", "content": f"启动失败：{exc}"})
         enqueue_messages({"type": "CollectorStatus", "status": "error", "content": "启动失败"})
     finally:

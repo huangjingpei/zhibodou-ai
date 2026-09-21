@@ -18,6 +18,13 @@ RTH = os.path.join(ROOT, "build", "rth_asyncio.py")
 # debug/测试构建（build_onefile.py / build_console_debug.py）不挂此钩子，
 # 默认仍为 http://127.0.0.1:8080；环境变量 PDK_BASE_URL 优先级更高。
 RTH_PDK_RELEASE = os.path.join(ROOT, "build", "rth_pdk_release.py")
+# 修复冻结态崩溃：中和 PyInstaller.isolated，消除弹幕/浏览器采集启动即报的
+# “function() argument 'code' must be code, not str”（_child.py:58 在冻结态把
+# 函数 __code__ 的 marshal 往返解成 str 而非 code 对象）。
+RTH_SHIM = os.path.join(ROOT, "build", "rth_isolated_shim.py")
+# 冻结态兜底：把打包进 _MEIPASS 的 live_plate 目录加入 sys.path，
+# 使其可作为顶层包 `import live_plate` 导入（与测试构建一致）。
+RTH_LIVEPLATE = os.path.join(ROOT, "build", "rth_liveplate.py")
 
 # asyncio 子模块（playwright 依赖）。PyInstaller 冻结后 asyncio.__init__ 里
 # `from .base_events import *` 不会把子模块名绑定回包命名空间，导致
@@ -38,8 +45,13 @@ PyInstaller.__main__.run([
     "--noconsole",               # 交付版：无黑窗口
     "--name", "zhibodou",
     "--paths", SRC,
+    "--paths", os.path.join(SRC, "danma"),   # 让 live_plate 作为顶层包被 PyInstaller 分析发现（danma/main.py 用绝对导入 `from live_plate`，运行期靠 sys.path 注入可达，但静态分析需此路径）
+    "--collect-submodules", "danma",   # 递归收集 danma 包（含 live_plate 及全部子模块，避免 No module named 'live_plate'）
+    "--noconfirm",               # 非交互重建：已有 dist/work 时直接覆盖
     "--runtime-hook", RTH,
     "--runtime-hook", RTH_PDK_RELEASE,
+    "--runtime-hook", RTH_SHIM,
+    "--runtime-hook", RTH_LIVEPLATE,
     "--add-data", os.path.join(ROOT, "scrcpy") + ";" + "scrcpy",
     "--add-data", os.path.join(ROOT, "apk") + ";" + "apk",
     "--hidden-import", "playwright",

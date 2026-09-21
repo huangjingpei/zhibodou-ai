@@ -9,4 +9,9 @@ debug / 测试构建（build_onefile.py、build_console_debug.py）不挂本钩�
 """
 import os
 
-os.environ.setdefault("PDK_BASE_URL", "https://pdk.graddu.com")
+# 交付版（release）强制指向生产 PDK 后端。
+# 用直接赋值（而非 setdefault）：即使打包/运行环境里残留
+# PDK_BASE_URL=http://127.0.0.1:8080（本地联调遗留），也不会被带进交付包，
+# 避免交付版误连本地。本机联调请改用 debug 构建（不挂本钩子，默认 127.0.0.1，
+# 可用 PDK_BASE_URL 环境变量切测试服）。
+os.environ["PDK_BASE_URL"] = "https://pdk.graddu.com"
