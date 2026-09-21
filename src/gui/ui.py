@@ -269,7 +269,7 @@ def reset_volume_meter():
 
 
 def _section_label(parent, text, row, column, **grid):
-    widget = theme.label(parent, text, fg=theme.TEXT_SOFT, font_size=10, anchor="w")
+    widget = theme.label(parent, text, fg=theme.TEXT_MUTED, font_size=9, bold=True, anchor="w")
     widget.grid(row=row, column=column, **grid)
     return widget
 
@@ -280,7 +280,7 @@ def _configure_text(widget):
         selectbackground=theme.PRIMARY, selectforeground="#FFFFFF",
         relief=tk.FLAT, bd=0, highlightthickness=1,
         highlightbackground=theme.BORDER, highlightcolor=theme.BORDER_FOCUS,
-        font=theme.font(10), padx=8, pady=6,
+        font=theme.font(9), padx=8, pady=6,
     )
 
 
@@ -295,6 +295,9 @@ def build_ui():
     global volume_canvas, lab_vad_state, _volume_poll_started, _volume_after_id, _shutting_down
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
+    global ent_deepseek_key, var_ai_reply, cmb_danmu_mode
+    global btn_open_txt1, btn_open_txt2, btn_open_txt3, lab_txt1_info, lab_txt2_info, lab_txt3_info
+    global btn_close_notepads
 
     _shutting_down = False
     _volume_poll_started = False
@@ -306,29 +309,31 @@ def build_ui():
     root.configure(bg=theme.BG)
     theme.configure_ttk(root)
 
-    header = tk.Canvas(root, height=64, bg=theme.BG, bd=0, highlightthickness=0)
+    # ---------------- 顶部品牌 Header ----------------
+    header = tk.Canvas(root, height=52, bg=theme.BG, bd=0, highlightthickness=0)
     header.pack(fill=tk.X)
     header.pack_propagate(False)
 
     def _paint_header(event):
         w, h = event.width, event.height
-        theme.draw_horizontal_gradient(header, w, h, "#182443", "#16465B")
+        theme.draw_horizontal_gradient(header, w, h, "#10192A", "#14243B")
         header.delete("header-fg")
-        header.create_oval(24, 16, 64, 56, outline=theme.CYAN, width=2, tags="header-fg")
-        header.create_text(44, 36, text="ZD", fill=theme.TEXT,
-                           font=(theme.FONT_EN, 12, "bold"), tags="header-fg")
-        header.create_text(82, 27, text="智播豆  ·  AI 智能直播工作台",
-                           fill=theme.TEXT, anchor="w", font=theme.font(18, "bold"), tags="header-fg")
-        header.create_text(83, 50, text="ZHIBODOU LIVE OPERATIONS CONSOLE",
-                           fill=theme.TEXT_MUTED, anchor="w", font=(theme.FONT_EN, 8), tags="header-fg")
-        header.create_text(w - 24, 36, text="DESKTOP  v1.7.0",
-                           fill=theme.TEXT_MUTED, anchor="e", font=(theme.FONT_EN, 9, "bold"), tags="header-fg")
+        header.create_oval(20, 11, 48, 39, outline=theme.CYAN, width=2, tags="header-fg")
+        header.create_text(34, 25, text="ZD", fill=theme.TEXT,
+                           font=(theme.FONT_EN, 10, "bold"), tags="header-fg")
+        header.create_text(62, 19, text="智播豆  ·  AI 智能直播工作台",
+                           fill=theme.TEXT, anchor="w", font=theme.font(13, "bold"), tags="header-fg")
+        header.create_text(63, 36, text="ZHIBODOU LIVE OPERATIONS CONSOLE",
+                           fill=theme.TEXT_MUTED, anchor="w", font=(theme.FONT_EN, 7), tags="header-fg")
+        header.create_text(w - 20, 25, text="DESKTOP  v1.7.0",
+                           fill=theme.TEXT_MUTED, anchor="e", font=(theme.FONT_EN, 8, "bold"), tags="header-fg")
 
     header.bind("<Configure>", _paint_header)
 
+    # ---------------- PDK 授权状态条 ----------------
     auth_outer = tk.Frame(root, bg=theme.BORDER)
-    auth_outer.pack(fill=tk.X, padx=16, pady=(8, 5))
-    auth_frame = tk.Frame(auth_outer, bg=theme.SURFACE, height=50)
+    auth_outer.pack(fill=tk.X, padx=14, pady=(6, 4))
+    auth_frame = tk.Frame(auth_outer, bg=theme.SURFACE, height=42)
     auth_frame.pack(fill=tk.X, padx=1, pady=1)
     auth_frame.pack_propagate(False)
 
@@ -339,64 +344,68 @@ def build_ui():
         auth_result = None
     auth_ok = auth_result is not None
 
-    status_dot = tk.Canvas(auth_frame, width=18, height=18, bg=theme.SURFACE,
+    status_dot = tk.Canvas(auth_frame, width=16, height=16, bg=theme.SURFACE,
                            bd=0, highlightthickness=0)
-    status_dot.pack(side=tk.LEFT, padx=(16, 8))
-    status_dot.create_oval(4, 4, 14, 14, fill=theme.GREEN if auth_ok else theme.RED, outline="")
+    status_dot.pack(side=tk.LEFT, padx=(14, 6))
+    status_dot.create_oval(3, 3, 13, 13, fill=theme.GREEN if auth_ok else theme.RED, outline="")
     lab_auth_status = theme.label(
         auth_frame, "PDK 授权已验证" if auth_ok else "PDK 未授权",
-        fg=theme.GREEN if auth_ok else theme.RED, bold=True, font_size=10,
+        fg=theme.GREEN if auth_ok else theme.RED, bold=True, font_size=9,
     )
     lab_auth_status.pack(side=tk.LEFT)
-    tk.Frame(auth_frame, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=14, pady=12)
+    tk.Frame(auth_frame, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=10)
     lab_auth_detail = theme.label(
         auth_frame, auth_result.display_detail() if auth_ok else "请重新登录",
-        muted=True, font_size=10, anchor="w",
+        muted=True, font_size=9, anchor="w",
     )
     lab_auth_detail.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    btn_logout = theme.button(auth_frame, "退出", color=theme.SURFACE_SOFT,
-                              active=theme.BORDER_FOCUS, width=8)
-    btn_logout.pack(side=tk.RIGHT, padx=(6, 14), pady=9)
-    btn_power = theme.button(auth_frame, "电源", color=theme.RED_DARK,
-                             active=theme.RED, width=8)
-    btn_power.pack(side=tk.RIGHT, padx=4, pady=9)
-    btn_auth = theme.button(auth_frame, "许可证", color=theme.SURFACE_SOFT,
-                            active=theme.BORDER_FOCUS, width=8)
-    btn_auth.pack(side=tk.RIGHT, padx=4, pady=9)
-    btn_pwd = theme.button(auth_frame, "账户资料", color=theme.SURFACE_SOFT,
-                           active=theme.BORDER_FOCUS, width=8)
-    btn_pwd.pack(side=tk.RIGHT, padx=4, pady=9)
 
-    # 先预留底栏空间，避免主内容在较矮屏幕上把底栏挤出可视区域。
-    footer = tk.Frame(root, bg=theme.BG_ELEVATED, height=28)
+    btn_logout = theme.button(auth_frame, "退出", color=theme.SLATE_BTN,
+                              active=theme.SLATE_BTN_HOVER, width=7, font_size=8)
+    btn_logout.pack(side=tk.RIGHT, padx=(4, 12), pady=7)
+    btn_power = theme.button(auth_frame, "电源", color=theme.RED_DARK,
+                             active=theme.RED, width=7, font_size=8)
+    btn_power.pack(side=tk.RIGHT, padx=3, pady=7)
+    btn_auth = theme.button(auth_frame, "许可证", color=theme.SLATE_BTN,
+                            active=theme.SLATE_BTN_HOVER, width=7, font_size=8)
+    btn_auth.pack(side=tk.RIGHT, padx=3, pady=7)
+    btn_pwd = theme.button(auth_frame, "账户资料", color=theme.SLATE_BTN,
+                           active=theme.SLATE_BTN_HOVER, width=8, font_size=8)
+    btn_pwd.pack(side=tk.RIGHT, padx=3, pady=7)
+
+    # 预留底栏空间
+    footer = tk.Frame(root, bg=theme.BG_ELEVATED, height=24)
     footer.pack(side=tk.BOTTOM, fill=tk.X)
     footer.pack_propagate(False)
     theme.label(footer, "杭州智鑫科技  ·  智播豆 AI 直播管控系统",
-                muted=True, font_size=9, bg=theme.BG_ELEVATED).pack(side=tk.LEFT, padx=18, pady=5)
+                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.LEFT, padx=16, pady=3)
     theme.label(footer, "LOCAL DESKTOP · SECURE SESSION",
-                muted=True, font_size=9, bg=theme.BG_ELEVATED).pack(side=tk.RIGHT, padx=18, pady=5)
+                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.RIGHT, padx=16, pady=3)
 
     main_all = tk.Frame(root, bg=theme.BG)
-    main_all.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 8))
+    main_all.pack(fill=tk.BOTH, expand=True, padx=14, pady=(2, 6))
 
-    ui_left = tk.Frame(main_all, bg=theme.BG, width=300)
+    # ---------------- 左侧设备与画面 (ui_left) ----------------
+    ui_left = tk.Frame(main_all, bg=theme.BG, width=290)
     ui_left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
     ui_left.pack_propagate(False)
+
     device_card, device_body = theme.card(ui_left, "设备画面 · 音频链路", accent=theme.PRIMARY)
     device_card.pack(fill=tk.BOTH, expand=True)
     theme.label(device_body, "SCRCPY DEVICE CHANNEL", muted=True,
-                font_size=9, anchor="w").pack(fill=tk.X, pady=(0, 7))
+                font_size=8, anchor="w").pack(fill=tk.X, pady=(0, 5))
     embed_container = tk.Frame(
         device_body, bg="#02070D", bd=0,
         highlightthickness=1, highlightbackground=theme.BORDER,
     )
     embed_container.pack(fill=tk.BOTH, expand=True)
+
     audio_hint_box = tk.Frame(device_body, bg=theme.SURFACE)
-    audio_hint_box.pack(fill=tk.X, pady=(6, 0))
+    audio_hint_box.pack(fill=tk.X, pady=(5, 0))
     theme.label(
-        audio_hint_box, "音频由 CABLE 路由至 VAD / OBS",
+        audio_hint_box, "音频由 CABLE 路由至 VAD/OBS",
         muted=True, font_size=8, anchor="center",
-    ).pack(side=tk.LEFT, expand=True, padx=(4, 2))
+    ).pack(side=tk.LEFT, expand=True, padx=(2, 2))
 
     def _open_audio_mix():
         try:
@@ -406,71 +415,80 @@ def build_ui():
             pass
 
     btn_audio_pref = theme.button(
-        audio_hint_box, "⚙️音频分流", color=theme.SURFACE_SOFT,
-        active=theme.BORDER_FOCUS, font_size=8, command=_open_audio_mix,
+        audio_hint_box, "⚙️ 音频分流", color=theme.SLATE_BTN,
+        active=theme.SLATE_BTN_HOVER, font_size=8, padx=6, pady=2, command=_open_audio_mix,
     )
-    btn_audio_pref.pack(side=tk.RIGHT, padx=(2, 4))
+    btn_audio_pref.pack(side=tk.RIGHT, padx=(2, 2))
 
+    # ---------------- 右侧主控制台 (ui_right) ----------------
     ui_right = tk.Frame(main_all, bg=theme.BG)
     ui_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    cfg_card, cfg = theme.card(ui_right, "产品与弹幕配置", accent=theme.PRIMARY, pady=8)
+    # 1. 产品与弹幕配置（严格 2 行 5 列对称对齐）
+    cfg_card, cfg = theme.card(ui_right, "产品与弹幕配置", accent=theme.PRIMARY, pady=6)
     cfg_card.pack(fill=tk.X, pady=(0, 6))
+    cfg.grid_columnconfigure(0, weight=0)
     cfg.grid_columnconfigure(1, weight=1)
+    cfg.grid_columnconfigure(2, weight=0)
     cfg.grid_columnconfigure(3, weight=2)
-    _section_label(cfg, "产品名称", 0, 0, padx=(0, 8), pady=4, sticky="w")
+    cfg.grid_columnconfigure(4, weight=0)
+
+    # 第 1 行：产品名称 | 产品描述 | 保存配置
+    _section_label(cfg, "产品名称", 0, 0, padx=(0, 6), pady=3, sticky="w")
     ent_prod_name = theme.entry(cfg)
-    ent_prod_name.grid(row=0, column=1, padx=(0, 12), pady=3, sticky="ew", ipady=3)
-    _section_label(cfg, "产品描述", 0, 2, padx=(0, 8), pady=4, sticky="w")
+    ent_prod_name.grid(row=0, column=1, padx=(0, 10), pady=3, sticky="ew", ipady=2)
+
+    _section_label(cfg, "产品描述", 0, 2, padx=(0, 6), pady=3, sticky="w")
     ent_prod_desc = theme.entry(cfg)
-    ent_prod_desc.grid(row=0, column=3, padx=(0, 10), pady=3, sticky="ew", ipady=3)
-    btn_save = theme.button(cfg, "保存配置", color=theme.PRIMARY,
-                            active=theme.PRIMARY_HOVER, width=9)
-    btn_save.grid(row=0, column=4, pady=4, sticky="e")
+    ent_prod_desc.grid(row=0, column=3, padx=(0, 10), pady=3, sticky="ew", ipady=2)
 
-    _section_label(cfg, "直播间", 1, 0, padx=(0, 8), pady=4, sticky="w")
+    btn_save = theme.button(cfg, "💾 保存配置", color=theme.PRIMARY,
+                            active=theme.PRIMARY_HOVER, width=9, font_size=9)
+    btn_save.grid(row=0, column=4, pady=3, sticky="e")
+
+    # 第 2 行：直播间 | AI 回复 Key与开关 | 启动弹幕
+    _section_label(cfg, "直播间", 1, 0, padx=(0, 6), pady=3, sticky="w")
     ent_danmu_url = theme.entry(cfg)
-    ent_danmu_url.grid(row=1, column=1, padx=(0, 12), pady=3, sticky="ew", ipady=3)
+    ent_danmu_url.grid(row=1, column=1, padx=(0, 10), pady=3, sticky="ew", ipady=2)
 
-    _section_label(cfg, "DeepSeek", 1, 2, padx=(0, 8), pady=4, sticky="w")
+    _section_label(cfg, "AI 回复", 1, 2, padx=(0, 6), pady=3, sticky="w")
     f_llm = tk.Frame(cfg, bg=theme.SURFACE)
     f_llm.grid(row=1, column=3, padx=(0, 10), pady=3, sticky="ew")
-    ent_deepseek_key = theme.entry(f_llm)
-    ent_deepseek_key.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
+
     var_ai_reply = tk.BooleanVar(value=True)
     chk_ai_reply = tk.Checkbutton(
-        f_llm, text="AI回复", variable=var_ai_reply,
-        bg=theme.SURFACE, fg=theme.TEXT, selectcolor=theme.SURFACE_SOFT,
+        f_llm, text="启用回复", variable=var_ai_reply,
+        bg=theme.SURFACE, fg=theme.TEXT_SOFT, selectcolor=theme.SURFACE_ALT,
         activebackground=theme.SURFACE, activeforeground=theme.TEXT,
-        font=theme.font(9),
+        font=theme.font(9), padx=0, bd=0, highlightthickness=0,
     )
-    chk_ai_reply.pack(side=tk.RIGHT, padx=(6, 0))
+    chk_ai_reply.pack(side=tk.LEFT, padx=(0, 6))
 
-    actions = tk.Frame(cfg, bg=theme.SURFACE)
-    actions.grid(row=1, column=4, pady=4, sticky="e")
-    btn_danmu = theme.button(actions, "启动弹幕", color=theme.PRIMARY,
-                             active=theme.PRIMARY_HOVER, width=9)
-    btn_danmu.pack(side=tk.LEFT)
+    ent_deepseek_key = theme.entry(f_llm)
+    ent_deepseek_key.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=2)
 
-    # 两块策略内容并排，既保留完整信息密度，也让 800px 高度的常见屏幕
-    # 能完整看到实时弹幕、运行日志与直播状态。
+    btn_danmu = theme.button(cfg, "🚀 启动弹幕", color=theme.TEAL,
+                             active=theme.CYAN, width=9, font_size=9)
+    btn_danmu.grid(row=1, column=4, pady=3, sticky="e")
+
+    # 2. 策略与预演并排区
     strategy_row = tk.Frame(ui_right, bg=theme.BG)
     strategy_row.pack(fill=tk.X, pady=(0, 6))
     strategy_row.grid_columnconfigure(0, weight=2, uniform="strategy")
     strategy_row.grid_columnconfigure(1, weight=3, uniform="strategy")
 
-    meet_card, meet = theme.card(strategy_row, "开播预演", accent=theme.PRIMARY, pady=8)
+    meet_card, meet = theme.card(strategy_row, "开播预演", accent=theme.PRIMARY, pady=6)
     meet_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-    txt_pre_meet = scrolledtext.ScrolledText(meet, height=2, wrap=tk.WORD)
+    txt_pre_meet = scrolledtext.ScrolledText(meet, height=3, wrap=tk.WORD)
     _configure_text(txt_pre_meet)
     txt_pre_meet.pack(fill=tk.BOTH, expand=True)
-    btn_meet = theme.button(meet, "执行预演", color=theme.PRIMARY, active=theme.PRIMARY_HOVER,
-                            width=9, state=tk.DISABLED)
-    btn_meet.pack(anchor="e", pady=(8, 0))
 
-    script_card, scripts = theme.card(strategy_row, "区间话术策略", accent=theme.PRIMARY, pady=8)
+    btn_meet = theme.button(meet, "▶ 执行预演", color=theme.SLATE_BTN,
+                            active=theme.SLATE_BTN_HOVER, width=9, state=tk.DISABLED, font_size=8)
+    btn_meet.pack(anchor="e", pady=(5, 0))
+
+    script_card, scripts = theme.card(strategy_row, "区间话术策略", accent=theme.PRIMARY, pady=6)
     script_card.grid(row=0, column=1, sticky="nsew")
-    scripts.grid_columnconfigure(4, weight=1)
 
     def _open_script_handler(key):
         from broadcast.script_files import open_script_notepad
@@ -489,6 +507,14 @@ def build_ui():
         if cnt == 0:
             log_screen("【话术策略】当前没有打开中的记事本。")
 
+    # 在 script_card 右上角标题栏嵌入“全部关闭”按钮，彻底释放行内空间
+    btn_close_notepads = theme.button(
+        script_card.header, "✕ 全部关闭",
+        color=theme.SURFACE_SOFT, active=theme.BORDER, font_size=8,
+        padx=6, pady=1, command=_close_notepads_handler,
+    )
+    btn_close_notepads.pack(side=tk.RIGHT, pady=2)
+
     script_rows_cfg = (
         ("区间 01", "0", "30", "01"),
         ("区间 02", "30", "100", "02"),
@@ -498,33 +524,32 @@ def build_ui():
     txt_btns = []
     txt_labels = []
 
-    for row, (title, _start, _end, key) in enumerate(script_rows_cfg):
-        _section_label(scripts, title, row, 0, padx=(0, 6), pady=2, sticky="w")
-        start_entry = theme.entry(scripts, width=4)
-        start_entry.grid(row=row, column=1, pady=2, sticky="w", ipady=2)
-        theme.label(scripts, "—", muted=True).grid(row=row, column=2, padx=3)
-        end_entry = theme.entry(scripts, width=5)
-        end_entry.grid(row=row, column=3, pady=2, sticky="w", ipady=2)
+    scripts.grid_columnconfigure(5, weight=1)
 
-        act_frame = tk.Frame(scripts, bg=theme.SURFACE)
-        act_frame.grid(row=row, column=4, padx=(8, 0), pady=2, sticky="ew")
+    for row, (title, _start, _end, key) in enumerate(script_rows_cfg):
+        _section_label(scripts, title, row, 0, padx=(0, 4), pady=3, sticky="w")
+        start_entry = theme.entry(scripts, width=4)
+        start_entry.grid(row=row, column=1, pady=3, sticky="w", ipady=2)
+        theme.label(scripts, "—", muted=True, font_size=9).grid(row=row, column=2, padx=2)
+        end_entry = theme.entry(scripts, width=5)
+        end_entry.grid(row=row, column=3, pady=3, sticky="w", ipady=2)
+        theme.label(scripts, "人", muted=True, font_size=8).grid(row=row, column=4, padx=(2, 6))
+
+        file_pill = theme.pill(
+            scripts, f"{key}.txt", bg=theme.SURFACE_SOFT,
+            fg=theme.CYAN, font_size=8, bold=True, padx=5, pady=2,
+        )
+        file_pill.grid(row=row, column=5, padx=(0, 4), sticky="w")
+
+        lab_info = theme.label(scripts, "(加载中)", muted=True, font_size=8, width=7, anchor="w")
+        lab_info.grid(row=row, column=6, padx=(0, 4), sticky="w")
 
         btn_open = theme.button(
-            act_frame, f"📄 打开 {key}.txt",
-            color=theme.PRIMARY, active=theme.PRIMARY_HOVER, width=11,
+            scripts, "📄 打开编辑",
+            color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER, width=9, font_size=8,
             command=lambda k=key: _open_script_handler(k),
         )
-        btn_open.pack(side=tk.LEFT)
-
-        lab_info = theme.label(act_frame, "(加载中)", muted=True, font_size=8)
-        lab_info.pack(side=tk.LEFT, padx=(5, 0))
-
-        if row == 0:
-            btn_close_notepads = theme.button(
-                act_frame, "关闭记事本", color=theme.SURFACE_SOFT, active=theme.SURFACE_SOFT, width=9,
-                command=_close_notepads_handler,
-            )
-            btn_close_notepads.pack(side=tk.RIGHT)
+        btn_open.grid(row=row, column=7, pady=3, sticky="e")
 
         range_widgets.append((start_entry, end_entry))
         txt_btns.append(btn_open)
@@ -534,52 +559,59 @@ def build_ui():
     btn_open_txt1, btn_open_txt2, btn_open_txt3 = txt_btns
     lab_txt1_info, lab_txt2_info, lab_txt3_info = txt_labels
 
-    ctrl_card, controls = theme.card(ui_right, "直播控制与音频活动", accent=theme.PRIMARY, pady=8)
+    # 3. 直播控制与音频活动（清晰分层，主控居中醒目，杜绝挤压）
+    ctrl_card, controls = theme.card(ui_right, "直播控制与音频活动", accent=theme.PRIMARY, pady=6)
     ctrl_card.pack(fill=tk.X, pady=(0, 6))
 
-    theme.label(controls, "语言", muted=True, font_size=9).grid(
-        row=0, column=0, padx=(0, 4), pady=2, sticky="w")
+    top_ctrl = tk.Frame(controls, bg=theme.SURFACE)
+    top_ctrl.pack(fill=tk.X, pady=(0, 4))
+
+    theme.label(top_ctrl, "语言", muted=True, font_size=9).pack(side=tk.LEFT, padx=(0, 4))
     cmb_doubao_lang = ttk.Combobox(
-        controls, style="Zhibodou.TCombobox",
+        top_ctrl, style="Zhibodou.TCombobox",
         values=config.DOUBAO_LANGUAGES, width=7, state="readonly",
     )
-    cmb_doubao_lang.grid(row=0, column=1, padx=(0, 8), pady=2, sticky="w")
+    cmb_doubao_lang.pack(side=tk.LEFT, padx=(0, 8))
 
-    theme.label(controls, "弹幕模式", muted=True, font_size=9).grid(
-        row=0, column=2, padx=(0, 4), pady=2, sticky="w")
+    theme.label(top_ctrl, "弹幕模式", muted=True, font_size=9).pack(side=tk.LEFT, padx=(0, 4))
     from danma.hardware import ALL_MODE_DISPLAYS
     cmb_danmu_mode = ttk.Combobox(
-        controls, style="Zhibodou.TCombobox",
-        values=ALL_MODE_DISPLAYS, width=24, state="readonly",
+        top_ctrl, style="Zhibodou.TCombobox",
+        values=ALL_MODE_DISPLAYS, width=18, state="readonly",
     )
-    cmb_danmu_mode.grid(row=0, column=3, padx=(0, 10), pady=2, sticky="w")
+    cmb_danmu_mode.pack(side=tk.LEFT, padx=(0, 12))
 
-    btn_live_start = theme.button(controls, "启动直播", color="#16845A",
-                                  active=theme.GREEN, width=9, state=tk.DISABLED)
-    btn_live_start.grid(row=0, column=4, padx=3, pady=2)
-    btn_live_stop = theme.button(controls, "停止直播", color=theme.RED_DARK,
-                                 active=theme.RED, width=9, state=tk.DISABLED)
-    btn_live_stop.grid(row=0, column=5, padx=3, pady=2)
-    lab_count = theme.label(controls, "下一轮 · 已就绪", fg=theme.CYAN,
-                            bold=True, font_size=9, anchor="w")
-    lab_count.grid(row=0, column=6, padx=(10, 0), sticky="w")
-    controls.grid_columnconfigure(6, weight=1)
-    controls.grid_columnconfigure(4, weight=1)
+    btn_live_start = theme.button(top_ctrl, "▶ 启动直播", color=theme.GREEN_DARK,
+                                  active=theme.GREEN, width=9, state=tk.DISABLED, font_size=9)
+    btn_live_start.pack(side=tk.LEFT, padx=(0, 6))
 
+    btn_live_stop = theme.button(top_ctrl, "⏹ 停止直播", color=theme.RED_DARK,
+                                 active=theme.RED, width=9, state=tk.DISABLED, font_size=9)
+    btn_live_stop.pack(side=tk.LEFT, padx=(0, 10))
+
+    lab_count = theme.label(top_ctrl, "下一轮 · 已就绪", fg=theme.CYAN,
+                            bold=True, font_size=9, anchor="e")
+    lab_count.pack(side=tk.RIGHT, padx=(4, 0))
+
+    # VAD 音量电平表与快速监控
     meter_row = tk.Frame(controls, bg=theme.SURFACE)
-    meter_row.grid(row=1, column=0, columnspan=6, sticky="ew", pady=(6, 0))
-    theme.label(meter_row, "VAD", muted=True, bold=True, font_size=8).pack(side=tk.LEFT, padx=(0, 8))
-    volume_canvas = tk.Canvas(meter_row, width=300, height=14, bg=theme.SURFACE_SOFT,
+    meter_row.pack(fill=tk.X, pady=(2, 0))
+
+    theme.label(meter_row, "VAD 监听", muted=True, bold=True, font_size=8).pack(side=tk.LEFT, padx=(0, 6))
+    volume_canvas = tk.Canvas(meter_row, width=280, height=14, bg=theme.SURFACE_ALT,
                               bd=0, highlightthickness=0)
     volume_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
     lab_vad_state = theme.label(meter_row, "待机 · 等待音频", muted=True,
-                                font_size=9, width=25, anchor="w")
-    lab_vad_state.pack(side=tk.LEFT, padx=(10, 0))
+                                font_size=8, width=20, anchor="w")
+    lab_vad_state.pack(side=tk.LEFT, padx=(8, 0))
+
     root.after_idle(lambda: _draw_meter_fill(0, theme.TEXT_FAINT))
     if not _volume_poll_started:
         _volume_poll_started = True
         _volume_after_id = root.after(50, _poll_volume_meter)
 
+    # ---------------- 4. 底部三栏（实时弹幕 | 运行日志 | 直播状态） ----------------
     bottom = tk.Frame(ui_right, bg=theme.BG)
     bottom.pack(fill=tk.BOTH, expand=True)
     bottom.grid_columnconfigure(0, weight=3, uniform="bottom")
@@ -587,59 +619,102 @@ def build_ui():
     bottom.grid_columnconfigure(2, weight=2, uniform="bottom")
     bottom.grid_rowconfigure(0, weight=1)
 
+    # 4.1 实时弹幕
     feed_card, feed = theme.card(bottom, "实时弹幕", accent=theme.PRIMARY)
     feed_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-    # width=1 阻止 Text 的默认 80 字符请求宽度挤压相邻状态卡。
     txt_danmu = scrolledtext.ScrolledText(feed, width=1, height=1, wrap=tk.WORD)
     _configure_text(txt_danmu)
     txt_danmu.pack(fill=tk.BOTH, expand=True)
 
-    log_card, logs = theme.card(bottom, "运行日志", accent=theme.PRIMARY, pady=8)
+    # 4.2 运行日志
+    log_card, logs = theme.card(bottom, "运行日志", accent=theme.PRIMARY, pady=6)
     log_card.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
     log_bar = tk.Frame(logs, bg=theme.SURFACE)
-    log_bar.pack(fill=tk.X, pady=(0, 5))
+    log_bar.pack(fill=tk.X, pady=(0, 4))
     lab_cap_status = theme.label(log_bar, "抓屏 · 已停止", fg=theme.AMBER, font_size=8)
     lab_cap_status.pack(side=tk.LEFT)
-    btn_cap = theme.button(log_bar, "开启抓屏", color=theme.SURFACE_SOFT,
-                           active=theme.BORDER_FOCUS, width=8, state=tk.DISABLED, font_size=8)
+    btn_cap = theme.button(log_bar, "开启抓屏", color=theme.SLATE_BTN,
+                           active=theme.SLATE_BTN_HOVER, width=8, state=tk.DISABLED, font_size=8, pady=2)
     btn_cap.pack(side=tk.RIGHT)
     txt_screen_log = scrolledtext.ScrolledText(logs, width=1, height=1, wrap=tk.WORD)
     _configure_text(txt_screen_log)
     txt_screen_log.pack(fill=tk.BOTH, expand=True)
 
-    stat_card, stats = theme.card(bottom, "直播状态", accent=theme.PRIMARY, pady=8)
+    # 4.3 直播状态立体监视大屏（彻底激活原 200px 纯黑死区）
+    stat_card, stats = theme.card(bottom, "直播状态", accent=theme.PRIMARY, pady=6)
     stat_card.grid(row=0, column=2, sticky="nsew")
+
     status_line = tk.Frame(stats, bg=theme.SURFACE)
-    status_line.pack(fill=tk.X, pady=(0, 6))
+    status_line.pack(fill=tk.X, pady=(0, 5))
     lab_sys_status = theme.label(status_line, "待机 · 等待启动", fg=theme.GREEN,
-                                 bold=True, font_size=10, anchor="w")
+                                 bold=True, font_size=9, anchor="w")
     lab_sys_status.pack(side=tk.LEFT)
     lab_danmu_status = theme.label(status_line, "弹幕采集 · 未启动", muted=True,
                                    font_size=8, anchor="e")
     lab_danmu_status.pack(side=tk.RIGHT)
 
+    # 核心指标三联卡
     metric_strip = tk.Frame(stats, bg=theme.SURFACE)
-    metric_strip.pack(fill=tk.X)
+    metric_strip.pack(fill=tk.X, pady=(0, 6))
 
     def _metric(title, initial, color):
         cell = tk.Frame(metric_strip, bg=theme.SURFACE_ALT)
         cell.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
-        theme.label(cell, title, muted=True, font_size=7, bg=theme.SURFACE_ALT).pack(pady=(3, 0))
-        value = theme.label(cell, initial, fg=color, bold=True, font_size=10, bg=theme.SURFACE_ALT)
-        value.pack(pady=(0, 3))
+        theme.label(cell, title, muted=True, font_size=7, bg=theme.SURFACE_ALT).pack(pady=(4, 0))
+        value = theme.label(cell, initial, fg=color, bold=True, font_size=11, bg=theme.SURFACE_ALT)
+        value.pack(pady=(0, 4))
         return value
 
     lab_online = _metric("实时在线", "0 人", theme.CYAN)
     lab_like = _metric("累计点赞", "0", theme.PURPLE)
     lab_gift = _metric("礼物互动", "0", theme.AMBER)
 
+    # 系统链路监视面板（展示核心四大链路状态，消除空洞）
+    link_frame = tk.Frame(stats, bg=theme.SURFACE_ALT, padx=8, pady=5)
+    link_frame.pack(fill=tk.X, pady=(0, 6))
+    theme.label(link_frame, "系统链路监视", bold=True, font_size=8, fg=theme.TEXT_SOFT, bg=theme.SURFACE_ALT).pack(fill=tk.X, pady=(0, 3))
+
+    def _link_row(parent, icon, name, initial_tag, tag_color):
+        row_f = tk.Frame(parent, bg=theme.SURFACE_ALT)
+        row_f.pack(fill=tk.X, pady=1)
+        theme.label(row_f, f"{icon} {name}", muted=True, font_size=8, bg=theme.SURFACE_ALT).pack(side=tk.LEFT)
+        tag = theme.pill(row_f, initial_tag, bg=theme.SURFACE_SOFT, fg=tag_color, font_size=7, bold=True)
+        tag.pack(side=tk.RIGHT)
+        return tag
+
+    _link_row(link_frame, "📱", "手机投屏链路", "等待连接", theme.AMBER)
+    _link_row(link_frame, "🎙️", "豆包对话交互", "前台就绪", theme.GREEN)
+    _link_row(link_frame, "🤖", "AI 弹幕回复", "智能过滤", theme.CYAN)
+    _link_row(link_frame, "🔈", "音频智能避让", "WASAPI 闪避", theme.PURPLE)
+
+    # OBS 音频桥接卡片（提供推流配置提示与一键复制功能）
+    obs_box = tk.Frame(stats, bg=theme.SURFACE_ALT, padx=8, pady=5)
+    obs_box.pack(fill=tk.X)
+    theme.label(obs_box, "OBS 浏览器音频源", bold=True, font_size=8, fg=theme.TEXT_SOFT, bg=theme.SURFACE_ALT).pack(fill=tk.X, pady=(0, 2))
+    obs_row = tk.Frame(obs_box, bg=theme.SURFACE_ALT)
+    obs_row.pack(fill=tk.X)
+    theme.label(obs_row, "http://127.0.0.1:8554/danmu_audio", fg=theme.CYAN, font_size=8, bg=theme.SURFACE_ALT).pack(side=tk.LEFT)
+
+    def _copy_obs_link():
+        try:
+            root.clipboard_clear()
+            root.clipboard_append("http://127.0.0.1:8554/danmu_audio")
+            btn_copy_obs.config(text="已复制", fg=theme.GREEN)
+            root.after(1500, lambda: btn_copy_obs.config(text="复制", fg=theme.TEXT))
+        except Exception:
+            pass
+
+    btn_copy_obs = theme.button(obs_row, "复制", color=theme.SURFACE_SOFT,
+                                active=theme.BORDER_FOCUS, font_size=7, padx=5, pady=0, command=_copy_obs_link)
+    btn_copy_obs.pack(side=tk.RIGHT)
+
+    # ---------------- 业务配置回填 ----------------
     cfg_load = config.load_config()
-    # 预填直播间地址：优先用户上次填的 danmu_url，否则按旧配置的平台键取默认地址。
     _fallback_platform = str(cfg_load.get("danmu_platform") or "douyin")
     _danmu_urls = cfg_load.get("danmu_urls") or {}
     danmu_url = str(cfg_load.get("danmu_url") or _danmu_urls.get(_fallback_platform) or "")
     ent_danmu_url.insert(0, danmu_url)
-    # 主播语言回填（所选值在豆包发送时实时生效，见 broadcast/live.py）
+
     _lang = str(cfg_load.get("doubao_language") or "普通话")
     if _lang not in config.DOUBAO_LANGUAGES:
         _lang = "普通话"

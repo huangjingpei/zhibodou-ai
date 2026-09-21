@@ -12,28 +12,36 @@ from tkinter import ttk
 
 # 高对比深色体系。大面积背景保持中性，只让主操作和状态使用彩色，避免
 # 青、紫、绿同时争抢注意力。正文对比度也比上一版提高了一档。
-BG = "#080F1C"
-BG_ELEVATED = "#0B1422"
-SURFACE = "#111C2B"
-SURFACE_ALT = "#162538"
-SURFACE_SOFT = "#1B2D43"
-BORDER = "#34485F"
-BORDER_FOCUS = "#7F98FF"
+# 高对比、低疲劳的黑曜石演播室控制台深色体系
+BG = "#0B101B"
+BG_ELEVATED = "#0F1626"
+SURFACE = "#131C2D"
+SURFACE_ALT = "#182337"
+SURFACE_SOFT = "#1E2B42"
+BORDER = "#223147"
+BORDER_SUBTLE = "#1A2536"
+BORDER_FOCUS = "#5874E8"
 
 TEXT = "#FFFFFF"
-TEXT_SOFT = "#E7EDF5"
-TEXT_MUTED = "#AFBED0"
-TEXT_FAINT = "#7F91A6"
+TEXT_SOFT = "#E2E8F0"
+TEXT_MUTED = "#94A3B8"
+TEXT_FAINT = "#64748B"
 
-PRIMARY = "#6D86F7"
-PRIMARY_HOVER = "#8299FF"
-CYAN = "#43C7D8"
-TEAL = "#36C5A3"
-GREEN = "#42D392"
-AMBER = "#F4BC68"
-RED = "#F16A78"
-RED_DARK = "#CF4F61"
-PURPLE = "#AA91F6"
+# 主色与功能色：低饱和科技感，清晰区分操作与状态
+PRIMARY = "#4F6EF7"
+PRIMARY_HOVER = "#6582FF"
+PRIMARY_MUTED = "#2D3F75"
+CYAN = "#22D3EE"
+TEAL = "#14B8A6"
+GREEN = "#10B981"
+GREEN_DARK = "#0D7B56"
+AMBER = "#F59E0B"
+RED = "#F43F5E"
+RED_DARK = "#BE123C"
+PURPLE = "#A855F7"
+
+SLATE_BTN = "#223046"
+SLATE_BTN_HOVER = "#2D3E59"
 
 FONT_UI = "Microsoft YaHei UI"
 FONT_EN = "Segoe UI"
@@ -73,54 +81,57 @@ def configure_ttk(root: tk.Misc) -> ttk.Style:
         pass
     style.configure(
         "Zhibodou.TCombobox",
-        fieldbackground=SURFACE_SOFT,
+        fieldbackground=SURFACE_ALT,
         background=SURFACE_SOFT,
         foreground=TEXT,
         arrowcolor=TEXT_MUTED,
         bordercolor=BORDER,
         lightcolor=BORDER,
         darkcolor=BORDER,
-        padding=(9, 6),
-        font=font(10),
+        padding=(8, 4),
+        font=font(9),
     )
     style.map(
         "Zhibodou.TCombobox",
-        fieldbackground=[("readonly", SURFACE_SOFT)],
+        fieldbackground=[("readonly", SURFACE_ALT)],
         foreground=[("readonly", TEXT)],
-        selectbackground=[("readonly", SURFACE_SOFT)],
+        selectbackground=[("readonly", SURFACE_ALT)],
         selectforeground=[("readonly", TEXT)],
         bordercolor=[("focus", BORDER_FOCUS)],
     )
-    root.option_add("*TCombobox*Listbox.background", SURFACE_SOFT)
+    root.option_add("*TCombobox*Listbox.background", SURFACE_ALT)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", PRIMARY)
     root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
     return style
 
 
-def card(parent: tk.Misc, title: str, *, accent: str = CYAN,
-         padx: int = 12, pady: int = 10) -> tuple[tk.Frame, tk.Frame]:
-    """创建带细描边和标题层的卡片，返回 (外框, 内容区)。"""
+def card(parent: tk.Misc, title: str, *, accent: str = PRIMARY,
+         padx: int = 10, pady: int = 8) -> tuple[tk.Frame, tk.Frame]:
+    """创建带细描边和标题层的卡片，返回 (外框, 内容区)。
+    外框附带 .header 属性，调用方可在卡片右上角放置轻量操作控件。"""
     outer = tk.Frame(parent, bg=BORDER, bd=0, highlightthickness=0)
     shell = tk.Frame(outer, bg=SURFACE, bd=0)
     shell.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
-    header = tk.Frame(shell, bg=SURFACE, height=30)
-    header.pack(fill=tk.X, padx=padx, pady=(7, 0))
+    header = tk.Frame(shell, bg=SURFACE, height=28)
+    header.pack(fill=tk.X, padx=padx, pady=(6, 2))
     header.pack_propagate(False)
-    tk.Frame(header, bg=accent, width=3).pack(side=tk.LEFT, fill=tk.Y, pady=6)
+    tk.Frame(header, bg=accent, width=3).pack(side=tk.LEFT, fill=tk.Y, pady=5)
     tk.Label(
         header, text=title, bg=SURFACE, fg=TEXT,
-        font=font(11, "bold"), anchor="w",
-    ).pack(side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True)
+        font=font(10, "bold"), anchor="w",
+    ).pack(side=tk.LEFT, padx=(7, 0))
 
     body = tk.Frame(shell, bg=SURFACE)
-    body.pack(fill=tk.BOTH, expand=True, padx=padx, pady=(4, pady))
+    body.pack(fill=tk.BOTH, expand=True, padx=padx, pady=(2, pady))
+    
+    outer.header = header
     return outer, body
 
 
 def label(parent: tk.Misc, text: str, *, muted: bool = False,
-          font_size: int = 10, bold: bool = False, **kwargs) -> tk.Label:
+          font_size: int = 9, bold: bool = False, **kwargs) -> tk.Label:
     return tk.Label(
         parent, text=text, bg=kwargs.pop("bg", SURFACE),
         fg=kwargs.pop("fg", TEXT_MUTED if muted else TEXT_SOFT),
@@ -129,13 +140,23 @@ def label(parent: tk.Misc, text: str, *, muted: bool = False,
     )
 
 
+def pill(parent: tk.Misc, text: str, *, bg: str = SURFACE_SOFT, fg: str = TEXT_MUTED,
+         font_size: int = 8, bold: bool = False, padx: int = 6, pady: int = 1) -> tk.Label:
+    """紧凑状态胶囊徽章"""
+    return tk.Label(
+        parent, text=text, bg=bg, fg=fg,
+        font=font(font_size, "bold" if bold else "normal"),
+        padx=padx, pady=pady,
+    )
+
+
 def entry(parent: tk.Misc, *, width: int | None = None) -> tk.Entry:
     widget = tk.Entry(
-        parent, bg=SURFACE_SOFT, fg=TEXT, insertbackground=CYAN,
+        parent, bg=SURFACE_ALT, fg=TEXT, insertbackground=CYAN,
         selectbackground=PRIMARY, selectforeground="#FFFFFF",
         relief=tk.FLAT, bd=0, highlightthickness=1,
         highlightbackground=BORDER, highlightcolor=BORDER_FOCUS,
-        font=font(10),
+        font=font(9),
     )
     if width is not None:
         widget.configure(width=width)
@@ -144,15 +165,16 @@ def entry(parent: tk.Misc, *, width: int | None = None) -> tk.Entry:
 
 def button(parent: tk.Misc, text: str, *, color: str = PRIMARY,
            active: str | None = None, fg: str = "#FFFFFF", width: int | None = None,
-           command=None, state=tk.NORMAL, font_size: int = 10) -> tk.Button:
+           command=None, state=tk.NORMAL, font_size: int = 9, bold: bool = True,
+           padx: int = 10, pady: int = 4) -> tk.Button:
     options = dict(
         text=text, command=command, state=state,
         bg=color, activebackground=active or color,
         fg=fg, activeforeground=fg,
-        disabledforeground=TEXT_MUTED,
+        disabledforeground=TEXT_FAINT,
         relief=tk.FLAT, bd=0, highlightthickness=0,
-        cursor="hand2", padx=12, pady=7,
-        font=font(font_size, "bold"),
+        cursor="hand2", padx=padx, pady=pady,
+        font=font(font_size, "bold" if bold else "normal"),
     )
     if width is not None:
         options["width"] = width
@@ -166,6 +188,6 @@ def text_area(parent: tk.Misc, text_widget_cls, **kwargs):
         selectbackground=PRIMARY, selectforeground="#FFFFFF",
         relief=tk.FLAT, bd=0, highlightthickness=1,
         highlightbackground=BORDER, highlightcolor=BORDER_FOCUS,
-        font=font(10), padx=8, pady=6,
+        font=font(9), padx=8, pady=6,
         **kwargs,
     )
