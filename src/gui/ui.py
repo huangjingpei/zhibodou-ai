@@ -37,6 +37,25 @@ btn_live_stop = None
 btn_cap = None
 btn_pwd = None
 btn_auth = None
+class ScriptFileAdapter:
+    """兼容旧接口直接访问 ent_cmd1.get()，实时代理至对应 01.txt/02.txt/03.txt 文件。"""
+    def __init__(self, key: str):
+        self.key = str(key)
+
+    def get(self, *args, **kwargs):
+        try:
+            from broadcast.script_files import read_script_content
+            return read_script_content(self.key)
+        except Exception:
+            return ""
+
+    def insert(self, *args, **kwargs):
+        pass
+
+    def delete(self, *args, **kwargs):
+        pass
+
+
 btn_save = None
 btn_danmu = None
 ent_danmu_url = None
@@ -45,13 +64,20 @@ ent_prod_name = None
 ent_prod_desc = None
 ent_r1min = None
 ent_r1max = None
-ent_cmd1 = None
+ent_cmd1 = ScriptFileAdapter("01")
 ent_r2min = None
 ent_r2max = None
-ent_cmd2 = None
+ent_cmd2 = ScriptFileAdapter("02")
 ent_r3min = None
 ent_r3max = None
-ent_cmd3 = None
+ent_cmd3 = ScriptFileAdapter("03")
+btn_open_txt1 = None
+btn_open_txt2 = None
+btn_open_txt3 = None
+lab_txt1_info = None
+lab_txt2_info = None
+lab_txt3_info = None
+btn_close_notepads = None
 ent_interval = None
 
 
@@ -255,6 +281,8 @@ def build_ui():
     global volume_canvas, lab_vad_state, _volume_poll_started, _volume_after_id, _shutting_down
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
+    global btn_open_txt1, btn_open_txt2, btn_open_txt3
+    global lab_txt1_info, lab_txt2_info, lab_txt3_info, btn_close_notepads
 
     _shutting_down = False
     _volume_poll_started = False
@@ -418,25 +446,75 @@ def build_ui():
     script_card, scripts = theme.card(strategy_row, "区间话术策略", accent=theme.PRIMARY, pady=8)
     script_card.grid(row=0, column=1, sticky="nsew")
     scripts.grid_columnconfigure(4, weight=1)
-    script_rows = (("区间 01", "0", "30"), ("区间 02", "30", "100"), ("区间 03", "100", "9999"))
-    script_entries = []
-    for row, (title, _start, _end) in enumerate(script_rows):
-        _section_label(scripts, title, row, 0, padx=(0, 8), pady=2, sticky="w")
-        start_entry = theme.entry(scripts, width=5)
+
+    def _open_script_handler(key):
+        from broadcast.script_files import open_script_notepad
+        def _on_saved(_k):
+            if root is not None:
+                try:
+                    root.after(0, refresh_script_labels)
+                except Exception:
+                    pass
+        open_script_notepad(key, on_saved=_on_saved, log_fn=log_screen)
+
+    def _close_notepads_handler():
+        from broadcast.script_files import close_all_script_notepads
+        cnt = close_all_script_notepads(log_fn=log_screen)
+        refresh_script_labels()
+        if cnt == 0:
+            log_screen("【话术策略】当前没有打开中的记事本。")
+
+    script_rows_cfg = (
+        ("区间 01", "0", "30", "01"),
+        ("区间 02", "30", "100", "02"),
+        ("区间 03", "100", "9999", "03"),
+    )
+    range_widgets = []
+    txt_btns = []
+    txt_labels = []
+
+    for row, (title, _start, _end, key) in enumerate(script_rows_cfg):
+        _section_label(scripts, title, row, 0, padx=(0, 6), pady=2, sticky="w")
+        start_entry = theme.entry(scripts, width=4)
         start_entry.grid(row=row, column=1, pady=2, sticky="w", ipady=2)
-        theme.label(scripts, "—", muted=True).grid(row=row, column=2, padx=6)
+        theme.label(scripts, "—", muted=True).grid(row=row, column=2, padx=3)
         end_entry = theme.entry(scripts, width=5)
         end_entry.grid(row=row, column=3, pady=2, sticky="w", ipady=2)
-        command_entry = theme.entry(scripts)
-        command_entry.grid(row=row, column=4, padx=(10, 0), pady=2, sticky="ew", ipady=2)
-        script_entries.append((start_entry, end_entry, command_entry))
-    (ent_r1min, ent_r1max, ent_cmd1), (ent_r2min, ent_r2max, ent_cmd2), \
-        (ent_r3min, ent_r3max, ent_cmd3) = script_entries
-    _section_label(scripts, "执行间隔", 3, 0, padx=(0, 8), pady=(3, 0), sticky="w")
-    ent_interval = theme.entry(scripts, width=5)
-    ent_interval.grid(row=3, column=1, pady=(3, 0), sticky="w", ipady=2)
-    theme.label(scripts, "秒 · 下一句仍由 VAD 放行", muted=True, font_size=8).grid(
-        row=3, column=2, columnspan=3, padx=6, pady=(3, 0), sticky="w")
+
+        act_frame = tk.Frame(scripts, bg=theme.SURFACE)
+        act_frame.grid(row=row, column=4, padx=(8, 0), pady=2, sticky="ew")
+
+        btn_open = theme.button(
+            act_frame, f"📄 打开 {key}.txt",
+            color=theme.PRIMARY, active=theme.PRIMARY_HOVER, width=12,
+            command=lambda k=key: _open_script_handler(k),
+        )
+        btn_open.pack(side=tk.LEFT)
+
+        lab_info = theme.label(act_frame, "(加载中)", muted=True, font_size=8)
+        lab_info.pack(side=tk.LEFT, padx=(6, 0))
+
+        range_widgets.append((start_entry, end_entry))
+        txt_btns.append(btn_open)
+        txt_labels.append(lab_info)
+
+    (ent_r1min, ent_r1max), (ent_r2min, ent_r2max), (ent_r3min, ent_r3max) = range_widgets
+    btn_open_txt1, btn_open_txt2, btn_open_txt3 = txt_btns
+    lab_txt1_info, lab_txt2_info, lab_txt3_info = txt_labels
+
+    footer_row = tk.Frame(scripts, bg=theme.SURFACE)
+    footer_row.grid(row=3, column=0, columnspan=5, sticky="ew", pady=(5, 0))
+    theme.label(
+        footer_row,
+        "💡 播报完毕由 VAD 自动接力下一轮 · 修改txt保存后自动关闭",
+        muted=True, font_size=8,
+    ).pack(side=tk.LEFT)
+
+    btn_close_notepads = theme.button(
+        footer_row, "关闭全部记事本", color="#4b5563", active="#374151", width=12,
+        command=_close_notepads_handler,
+    )
+    btn_close_notepads.pack(side=tk.RIGHT)
 
     ctrl_card, controls = theme.card(ui_right, "直播控制与音频活动", accent=theme.PRIMARY, pady=8)
     ctrl_card.pack(fill=tk.X, pady=(0, 6))
@@ -550,4 +628,22 @@ def build_ui():
     ent_r3min.insert(0, cfg_load["r3_min"])
     ent_r3max.insert(0, cfg_load["r3_max"])
     ent_cmd3.insert(0, cfg_load["cmd3"])
-    ent_interval.insert(0, cfg_load["script_interval"])
+    refresh_script_labels()
+
+
+def refresh_script_labels():
+    """刷新 01.txt, 02.txt, 03.txt 文件的字数与就绪状态显示。"""
+    try:
+        from broadcast.script_files import get_script_word_count, ensure_script_files_exist
+        ensure_script_files_exist()
+        pairs = (("01", lab_txt1_info), ("02", lab_txt2_info), ("03", lab_txt3_info))
+        for key, lbl in pairs:
+            if lbl is not None:
+                cnt = get_script_word_count(key)
+                if cnt > 0:
+                    lbl.config(text=f"({cnt}字)", fg="#86efac")
+                else:
+                    lbl.config(text="(空)", fg="#fbbf24")
+    except Exception:
+        pass
+

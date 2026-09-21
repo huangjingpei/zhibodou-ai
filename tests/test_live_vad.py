@@ -171,6 +171,29 @@ class LiveDispatchAndVadSafetyTests(unittest.TestCase):
             self.assertFalse(state.is_broadcasting)
             self.assertFalse(state.live_running)
 
+    def test_start_live_closes_all_script_notepads(self):
+        """开播时必须自动关闭所有打开的话术记事本，确保最新编辑内容落盘"""
+        state.system_power = True
+        state.is_broadcasting = False
+        with mock.patch("broadcast.script_files.close_all_script_notepads") as mock_close, \
+                mock.patch.object(live.danmu, "start_danmu_capture"), \
+                mock.patch.object(live.capture, "start_capture"), \
+                mock.patch.object(live.ui, "set_status"), \
+                mock.patch.object(live.ui, "log_screen"), \
+                mock.patch.object(live.ui, "reset_volume_meter"), \
+                mock.patch("threading.Thread"):
+            live.start_live()
+            mock_close.assert_called_once()
+            self.assertTrue(state.is_broadcasting)
+
+    def test_get_active_script_config_reads_from_txt_files(self):
+        """_get_active_script_config 必须直接从 01.txt, 02.txt, 03.txt 读取话术"""
+        with mock.patch("broadcast.script_files.read_script_content", side_effect=lambda k: f"来自{k}.txt的脚本"):
+            cfg = live._get_active_script_config()
+            self.assertEqual(cfg["cmd1"], "来自01.txt的脚本")
+            self.assertEqual(cfg["cmd2"], "来自02.txt的脚本")
+            self.assertEqual(cfg["cmd3"], "来自03.txt的脚本")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,8 +50,6 @@ DEFAULT_CFG = {
     "r1_min": "0", "r1_max": "30", "cmd1": "留人话术内容填这里",
     "r2_min": "30", "r2_max": "100", "cmd2": "产品讲解话术内容填这里",
     "r3_min": "100", "r3_max": "9999", "cmd3": "逼单促单话术内容填这里",
-    # 注：script_interval 已不再作为切话术依据（切话术改由 VAD 静音时长驱动），保留仅为兼容界面配置，可忽略。
-    "script_interval": 25,
     # 弹幕浏览器采集。正式开播时自动启动，停止直播时自动关闭。
     # 需要登录的创作者后台首次应把 headless 改为 False，扫码/登录成功后再改回 True；
     # 登录状态保存在独立用户目录中，不要提交到版本库。
@@ -141,13 +139,19 @@ def save_config():
     from gui.ui import (ent_prod_name, ent_prod_desc, txt_pre_meet,
                     ent_r1min, ent_r1max, ent_cmd1,
                     ent_r2min, ent_r2max, ent_cmd2,
-                    ent_r3min, ent_r3max, ent_cmd3, ent_interval,
+                    ent_r3min, ent_r3max, ent_cmd3,
                     ent_danmu_url, cmb_doubao_lang)
     import tkinter.messagebox as messagebox
+    try:
+        from broadcast.script_files import close_all_script_notepads
+        close_all_script_notepads()
+    except Exception:
+        pass
     try:
         # 在现有配置上更新界面字段。不能重新创建只含界面字段的字典，否则用户手工
         # 调好的 VAD 设备、阈值和 scrcpy 音频路由会在点击“保存”后被静默删除。
         d = load_config()
+        d.pop("script_interval", None)
         d.update({
             "product_name": ent_prod_name.get().strip(),
             "product_desc": ent_prod_desc.get().strip(),
@@ -155,7 +159,6 @@ def save_config():
             "r1_min": ent_r1min.get(), "r1_max": ent_r1max.get(), "cmd1": ent_cmd1.get(),
             "r2_min": ent_r2min.get(), "r2_max": ent_r2max.get(), "cmd2": ent_cmd2.get(),
             "r3_min": ent_r3min.get(), "r3_max": ent_r3max.get(), "cmd3": ent_cmd3.get(),
-            "script_interval": ent_interval.get(),
             # 平台由 danma 按域名识别、headless 已写死 False（无窗口抓不到弹幕），
             # 两者均不再从 UI 采集。
             "danmu_url": ent_danmu_url.get().strip(),
@@ -163,6 +166,11 @@ def save_config():
         })
         with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
+        try:
+            from gui.ui import refresh_script_labels
+            refresh_script_labels()
+        except Exception:
+            pass
         messagebox.showinfo("成功", "✅配置保存完成")
     except Exception as e:
         messagebox.showerror("错误", f"保存失败：{e}")

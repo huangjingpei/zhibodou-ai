@@ -154,7 +154,6 @@ def _get_active_script_config():
         "r3_min": str(cfg.get("r3_min", "100")),
         "r3_max": str(cfg.get("r3_max", "9999")),
         "cmd3": str(cfg.get("cmd3", "")),
-        "interval": str(cfg.get("script_interval", "1")),
     }
     try:
         from gui import ui as _ui
@@ -201,6 +200,21 @@ def _get_active_script_config():
             interval_val = str(_ui.ent_interval.get() or "").strip()
             if interval_val:
                 res["interval"] = interval_val
+    except Exception:
+        pass
+
+    # 优先从 01.txt / 02.txt / 03.txt 读取话术正文（txt 文件驱动）
+    try:
+        from broadcast.script_files import read_script_content
+        t1 = read_script_content("01")
+        if t1:
+            res["cmd1"] = t1
+        t2 = read_script_content("02")
+        if t2:
+            res["cmd2"] = t2
+        t3 = read_script_content("03")
+        if t3:
+            res["cmd3"] = t3
     except Exception:
         pass
     return res
@@ -488,6 +502,14 @@ def start_live():
 
     if getattr(state, 'is_broadcasting', False):
         return
+
+    # 开播前自动关闭所有已打开的话术记事本，确保最新内容落盘
+    try:
+        from broadcast.script_files import close_all_script_notepads
+        close_all_script_notepads(log_fn=ui.log_screen)
+    except Exception:
+        pass
+
     with _round_lock:
         _live_generation += 1
         _vad_stop_event = threading.Event()

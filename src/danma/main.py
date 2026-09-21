@@ -2,6 +2,7 @@ import json
 import os
 import random
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -66,6 +67,35 @@ class DanmuBrowserCollector:
         self.ParseXhsMessage = Xhs().ParseXhsComment
         self.ParseXhsShopMessage = Xhs().ParseXhsShopComment
 
+def cleanup_browser_profile(user_data_dir: str):
+    """清理残留的占用该用户数据目录的 Chrome 进程及锁文件，防止 exitCode=21 导致崩溃。"""
+    if not user_data_dir:
+        return
+    # 1. 终止占用该 profile 目录的孤儿 Chrome 进程
+    try:
+        norm_dir = os.path.normpath(user_data_dir)
+        dir_name = os.path.basename(norm_dir)
+        cmd = [
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            f"Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{dir_name}*' }} | "
+            f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        ]
+        subprocess.run(cmd, capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+    # 2. 清理残留锁文件
+    if os.path.exists(user_data_dir):
+        for lock_name in ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"):
+            lp = os.path.join(user_data_dir, lock_name)
+            if os.path.exists(lp):
+                try:
+                    os.remove(lp)
+                except Exception:
+                    pass
+
+
     def getUserData(self):
         if self.user_data_dir:
             return os.path.abspath(os.path.expandvars(self.user_data_dir))
@@ -93,6 +123,7 @@ class DanmuBrowserCollector:
             user_agent = None
             if 'v.kuaishou.com' in self.url:
                 user_agent = "Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Mobile Safari/537.36"
+            cleanup_browser_profile(self.getUserData())
             with playwright() as pw:
 
                 try:
@@ -228,9 +259,14 @@ class DanmuBrowserCollector:
 
     def browser_close(self):
         """
-        关闭浏览器，失效
+        关闭浏览器与监听
         """
         self._stop_event.set()
+        try:
+            if self.browser is not None:
+                self.browser.close()
+        except Exception:
+            pass
 
     def http(self, response):
         """
