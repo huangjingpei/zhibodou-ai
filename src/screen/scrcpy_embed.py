@@ -88,6 +88,21 @@ def _is_virtual_audio_route(output_name: str, input_name: str) -> bool:
     )
 
 
+def open_app_volume_settings():
+    """在 Windows 10 / 11 上打开系统原生的「应用音量和设备首选项 / 音量合成器」设置页面。
+
+    用户可在此将 scrcpy.exe 的输出设备单独选为 CABLE Input，系统将永久记住，
+    无需修改电脑的全局默认扬声器和默认麦克风。
+    """
+    try:
+        os.startfile("ms-settings:apps-volume")
+    except Exception:
+        try:
+            subprocess.Popen(["cmd", "/c", "start", "ms-settings:apps-volume"], shell=True)
+        except Exception:
+            pass
+
+
 def start_scrcpy_embed():
     """启动 scrcpy 子进程并尝试把窗口嵌入 embed_container。
     优先使用 SCRCPY_OPTIMIZED_ARGS（视频低码率/低帧率 + 音频低延迟 PCM 直出）；
@@ -154,35 +169,30 @@ def start_scrcpy_embed():
             _dev_ok = False
             _default_out_name = ""
         if _dev_ok:
-            # 内置 scrcpy 4.1 使用 SDL 默认播放端点。环境变量保留作兼容提示，但不能把
-            # “设备存在”误当成“scrcpy 已定向成功”；必须校验 Windows 默认播放设备。
             _family = scrcpy_out_dev.split("(", 1)[0].strip().lower()
-            if not _default_out_name or _family not in _default_out_name.lower():
-                ui.log_screen("【投屏】❌ Windows 默认播放设备为【%s】，不是配置的【%s】。"
-                              "scrcpy 4.1 会打开默认播放端点，VAD 将收不到手机声音；"
-                              "请先把配置的播放设备设为 Windows 默认播放设备。"
-                              % (_default_out_name or "未知", scrcpy_out_dev))
-                messagebox.showerror(
-                    "音频路由未就绪",
-                    "scrcpy 需要从配置的 Windows 默认播放设备输出手机声音。\n\n"
-                    f"当前默认播放设备：{_default_out_name or '未知'}\n"
-                    f"要求的播放设备：{scrcpy_out_dev}\n\n"
-                    f"请在 Windows 声音设置中把 {scrcpy_out_dev} 设为默认播放设备后重试。",
-                )
-                return False
-            ui.log_screen("【投屏】✅ 默认播放设备【%s】与配置匹配；"
-                          "scrcpy 手机音频将从该设备播放。" % _default_out_name)
+            if _default_out_name and _family in _default_out_name.lower():
+                ui.log_screen("【投屏】✅ 默认播放设备【%s】与虚拟声卡匹配；"
+                              "scrcpy 手机音频直接经该设备传输。" % _default_out_name)
+            else:
+                ui.log_screen("【投屏】✅ 虚拟声卡【%s】已就绪，当前系统默认播放设备为【%s】（系统音频不受影响）。"
+                              % (scrcpy_out_dev, _default_out_name or "默认扬声器"))
+                ui.log_screen("【投屏】💡 提示：若需让豆包声音仅入虚拟声卡不经扬声器外放，可在 Win10/Win11 音量合成器中将 scrcpy 输出设为 CABLE Input。")
             if virtual_audio_route:
-                ui.log_screen("【投屏】VAD 使用数字回环输入【%s】。" % (vad_input_dev or "自动选择"))
+                ui.log_screen("【投屏】VAD 将从虚拟声卡【%s】精确抓流，OBS 请采集该设备。" % (vad_input_dev or "CABLE Output"))
             else:
                 ui.log_screen(
                     "【投屏】⚠ VAD 使用实体麦克风【%s】监听扬声器，已启用相对底噪自适应；"
                     "环境噪声或系统音量过低仍可能影响识别。" % (vad_input_dev or "系统默认")
                 )
         else:
-            ui.log_screen("【投屏】❌ 本机未找到播放设备【%s】，拒绝启动无音频投屏。"
-                          "请运行 python -m src.audio.vad 核对设备全名。"
+            ui.log_screen("【投屏】❌ 本机未找到虚拟音频设备【%s】。请先安装 VB-CABLE 虚拟声卡驱动后重试。"
                           % scrcpy_out_dev)
+            messagebox.showerror(
+                "虚拟声卡未安装",
+                f"未在系统中检测到音频设备：{scrcpy_out_dev}\n\n"
+                "本项目音频链路需依赖 VB-CABLE 虚拟声卡。\n"
+                "请安装 VB-CABLE 驱动后重试（安装后无需修改系统默认音频）。",
+            )
             return False
 
     # Android 10 及以下走手机扬声器 + 实体麦克风；新系统才尝试 scrcpy 音频转发。
@@ -230,18 +240,23 @@ def start_scrcpy_embed():
         return False
 
     def embed_work():
-        parent_hwnd = win_embed.get_tk_widget_hwnd(ui.embed_container)
-        max_wait_sec = 8
-        spent = 0
-        state.scrcpy_hwnd = 0
-        while spent < max_wait_sec:
-            state.scrcpy_hwnd = win_embed.find_scrcpy_main_hwnd()
-            if state.scrcpy_hwnd != 0:
-                break
-            time.sleep(0.35)
-            spent += 0.35
-        if state.scrcpy_hwnd and parent_hwnd:
-            win_embed.real_embed_window(state.scrcpy_hwnd, parent_hwnd, 0, 0, 290, 530)
+        try:
+            if not getattr(ui, "embed_container", None):
+                return
+            parent_hwnd = win_embed.get_tk_widget_hwnd(ui.embed_container)
+            max_wait_sec = 8
+            spent = 0
+            state.scrcpy_hwnd = 0
+            while spent < max_wait_sec:
+                state.scrcpy_hwnd = win_embed.find_scrcpy_main_hwnd()
+                if state.scrcpy_hwnd != 0:
+                    break
+                time.sleep(0.35)
+                spent += 0.35
+            if state.scrcpy_hwnd and parent_hwnd:
+                win_embed.real_embed_window(state.scrcpy_hwnd, parent_hwnd, 0, 0, 290, 530)
+        except Exception:
+            pass
 
     threading.Thread(target=embed_work, daemon=True).start()
     return True

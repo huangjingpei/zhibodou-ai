@@ -351,10 +351,25 @@ def build_ui():
         highlightthickness=1, highlightbackground=theme.BORDER,
     )
     embed_container.pack(fill=tk.BOTH, expand=True)
+    audio_hint_box = tk.Frame(device_body, bg=theme.SURFACE)
+    audio_hint_box.pack(fill=tk.X, pady=(6, 0))
     theme.label(
-        device_body, "设备连接后将在此显示 · 音频由 CABLE 路由至 VAD",
-        muted=True, font_size=9, anchor="center",
-    ).pack(fill=tk.X, pady=(8, 0))
+        audio_hint_box, "音频由 CABLE 路由至 VAD / OBS",
+        muted=True, font_size=8, anchor="center",
+    ).pack(side=tk.LEFT, expand=True, padx=(4, 2))
+
+    def _open_audio_mix():
+        try:
+            from screen import scrcpy_embed
+            scrcpy_embed.open_app_volume_settings()
+        except Exception:
+            pass
+
+    btn_audio_pref = theme.button(
+        audio_hint_box, "⚙️音频分流", color=theme.SURFACE_SOFT,
+        active=theme.BORDER_FOCUS, font_size=8, command=_open_audio_mix,
+    )
+    btn_audio_pref.pack(side=tk.RIGHT, padx=(2, 4))
 
     ui_right = tk.Frame(main_all, bg=theme.BG)
     ui_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
