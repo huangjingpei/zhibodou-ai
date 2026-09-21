@@ -30,9 +30,31 @@ def tiktok_pb2(data: bytes):
     :param config: setting/config
     :return:
     """
+    if not data or len(data) < 10:
+        return []
+    if data[:2] == b'\x1f\x8b':
+        try:
+            data = gzip.decompress(data)
+        except Exception:
+            pass
+
     listmessage = []
     r = tiktok_message_pb2.Response1()
-    r.ParseFromString(data)
+    try:
+        r.ParseFromString(data)
+    except Exception:
+        # 如果不是 Response1，尝试以 PushFrame1 解析解包
+        try:
+            o = tiktok_message_pb2.PushFrame1()
+            o.ParseFromString(data)
+            payload = o.palyload1
+            for t in o.headersList1:
+                if getattr(t, 'key1', None) == 'compress_type' and getattr(t, 'value1', None) == "gzip":
+                    payload = gzip.decompress(o.palyload1)
+                    break
+            return tiktok_pb2(payload)
+        except Exception:
+            return []
 
     e = r
     messagelist = e.messages1

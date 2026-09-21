@@ -17,6 +17,7 @@
   "danmu_platform": "douyin",
   "danmu_url": "https://live.douyin.com/646454278948",
   "danmu_headless": true,
+  "danmu_metrics_only": true,
   "danmu_user_data_dir": "",
   "danmu_chrome_path": "",
   "danmu_urls": {

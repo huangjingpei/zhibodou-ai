@@ -37,6 +37,9 @@ DEFAULT_CFG = {
     "danmu_platform": "douyin",
     "danmu_url": "",
     "danmu_headless": True,
+    # 仅统计指标模式：true = 打开浏览器只统计 实时在线/累计点赞/礼物互动，
+    # 不采集弹幕文本（聊天/进场/关注分享均不下发）；false = 完整弹幕采集。
+    "danmu_metrics_only": False,
     "danmu_user_data_dir": "",
     "danmu_chrome_path": "",
     "danmu_urls": {

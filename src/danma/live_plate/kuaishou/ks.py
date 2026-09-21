@@ -5,7 +5,7 @@
 
 from google.protobuf.json_format import MessageToDict
 
-from live_plate.Message import CreatChatMessage, CreatLikeMessage, CreatGiftMessage
+from live_plate.Message import CreatChatMessage, CreatLikeMessage, CreatGiftMessage, CreatSocialMessage, CreatMemberMessage
 from live_plate.kuaishou import kuaishou_message_pb2
 import json
 
@@ -40,50 +40,93 @@ def get_head_img(principalId):
 
 
 def kuaishou_pb(data: bytes):
+    if not data or len(data) < 4:
+        return []
     o = kuaishou_message_pb2.SocketMessage()
-    o.ParseFromString(data)
+    try:
+        o.ParseFromString(data)
+    except Exception:
+        return []
+
+    payload = o.payload
+    # 快手服务器推送：当 compressionType == 2 或包含 GZIP 魔数时必须进行解压
+    if getattr(o, 'compressionType', None) == 2 or (payload and payload[:2] == b'\x1f\x8b'):
+        try:
+            import gzip
+            payload = gzip.decompress(payload)
+        except Exception:
+            pass
+
     listmessage = []
-    print(o.payloadType)
 
     if o.payloadType == 340:
-        watch_list = kuaishou_message_pb2.SCWebLiveWatchingUsers()
-        watch_list.ParseFromString(o.payload)
-        user_list = MessageToDict(watch_list, preserving_proto_field_name=True)
+        try:
+            watch_list = kuaishou_message_pb2.SCWebLiveWatchingUsers()
+            watch_list.ParseFromString(payload)
+            user_list = MessageToDict(watch_list, preserving_proto_field_name=True)
+            for user in user_list.get('watchingUser', []):
+                user_data = user.get('user', {})
+                if 'principalId' in user_data and 'headUrl' in user_data:
+                    head_img[user_data['principalId']] = user_data['headUrl']
+        except Exception:
+            pass
 
-        for user in user_list['watchingUser']:
-            user_data = user['user']
-            head_img[user_data['principalId']] = user_data['headUrl']
+    elif o.payloadType == 310:
+        try:
+            ms = kuaishou_message_pb2.SCWebFeedPush()
+            ms.ParseFromString(payload)
+            obj1 = MessageToDict(ms, preserving_proto_field_name=True)
 
-    if o.payloadType == 310:
-        ms = kuaishou_message_pb2.SCWebFeedPush()
-        ms.ParseFromString(o.payload)
-        obj1 = MessageToDict(ms, preserving_proto_field_name=True)
+            if 'commentFeeds' in obj1:
+                for feed in obj1['commentFeeds']:
+                    user_info = feed.get('user', {})
+                    user_name = user_info.get('userName') or user_info.get('nickname') or user_info.get('name') or '快手老铁'
+                    user_id = user_info.get('principalId', '')
+                    content = feed.get('content', '')
+                    avatar = user_info.get('headUrl') or head_img.get(user_id, '')
+                    listmessage.append(
+                        CreatChatMessage(name=user_name, head_image=avatar, content=content)
+                    )
 
-        if 'commentFeeds' in obj1:
-            for feed in obj1['commentFeeds']:
-                listmessage.append(
-                    CreatChatMessage(name=feed['user']['userName'], head_image="", content=feed['content']))
+            if 'likeFeeds' in obj1:
+                for feed in obj1['likeFeeds']:
+                    user_info = feed.get('user', {})
+                    user_name = user_info.get('userName') or user_info.get('nickname') or user_info.get('name') or '快手老铁'
+                    user_id = user_info.get('principalId', '')
+                    avatar = user_info.get('headUrl') or head_img.get(user_id, '')
+                    listmessage.append(CreatLikeMessage(name=user_name, head_image=avatar, count=1))
 
-        if 'likeFeeds' in obj1:
-            for feed in obj1['likeFeeds']:
-                listmessage.append(CreatLikeMessage(name=feed['user']['userName'], head_image="", count=1))
+            if 'giftFeeds' in obj1:
+                for feed in obj1['giftFeeds']:
+                    user_info = feed.get('user', {})
+                    user_name = user_info.get('userName') or user_info.get('nickname') or user_info.get('name') or '快手老铁'
+                    user_id = user_info.get('principalId', '')
+                    avatar = user_info.get('headUrl') or head_img.get(user_id, '')
+                    giftId = str(feed.get('giftId', ''))
+                    gift_info = (giftlist or {}).get(giftId, {})
+                    giftname = gift_info.get('giftName') or '礼物'
+                    combo = int(feed.get('comboCount', 1) or 1)
+                    batch = int(feed.get('batchSize', 1) or 1)
+                    listmessage.append(CreatGiftMessage(name=user_name, head_image=avatar, gift_name=giftname, gift_count=combo * batch))
 
-        if 'giftFeeds' in obj1:
-            for feed in obj1['giftFeeds']:
+            if 'shareFeeds' in obj1:
+                for feed in obj1['shareFeeds']:
+                    user_info = feed.get('user', {})
+                    user_name = user_info.get('userName') or user_info.get('nickname') or user_info.get('name') or '快手老铁'
+                    user_id = user_info.get('principalId', '')
+                    avatar = user_info.get('headUrl') or head_img.get(user_id, '')
+                    listmessage.append(CreatSocialMessage(name=user_name, head_image=avatar))
 
-                giftId = str(feed['giftId'])
+            if 'systemNoticeFeeds' in obj1:
+                for feed in obj1['systemNoticeFeeds']:
+                    user_info = feed.get('user', {})
+                    user_name = user_info.get('userName') or user_info.get('nickname') or user_info.get('name') or '快手老铁'
+                    user_id = user_info.get('principalId', '')
+                    avatar = user_info.get('headUrl') or head_img.get(user_id, '')
+                    listmessage.append(CreatMemberMessage(name=user_name, head_image=avatar))
+        except Exception:
+            pass
 
-                if giftId in giftlist:
-                    giftname = giftlist[str(giftId)]['giftName']
-                    print(giftlist[str(giftId)])
-
-                else:
-                    giftname = '未知'
-                    price = '未知'
-
-
-
-                listmessage.append(CreatGiftMessage(name=feed['user']['userName'], head_image="", gift_name=giftname, gift_count=int(feed['comboCount']) * int(feed['batchSize'])))
     return listmessage
 
 

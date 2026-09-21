@@ -102,7 +102,9 @@ def douyin_pb2(data: bytes):
 
 
 
-            listmessage.append(CreatLikeMessage(name=name,head_image=head_img,count=res['count']))
+            # MessageToDict 会省略 proto3 默认值字段：count 缺失时直接取键会
+            # KeyError 并炸掉整批消息（含在线人数），故用 .get 兜底。
+            listmessage.append(CreatLikeMessage(name=name,head_image=head_img,count=res.get('count', 1)))
 
         elif t.method == "WebcastMemberMessage":
 
@@ -126,7 +128,9 @@ def douyin_pb2(data: bytes):
             message_.ParseFromString(o)
             res = MessageToDict(message_, preserving_proto_field_name=True)
 
-            listmessage.append(CreatRoomMessage(count=res['total']))
+            # MessageToDict 会省略 proto3 默认值字段：total==0 时键不存在，
+            # 直接 res['total'] 会 KeyError 并炸掉整批消息，故用 .get 兜底。
+            listmessage.append(CreatRoomMessage(count=res.get('total', 0)))
 
     return listmessage
 

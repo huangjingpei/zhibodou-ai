@@ -17,19 +17,13 @@ from typing import Iterable
 
 
 def _install_isolated_shim() -> None:
-    """冻结态自修复：中和 PyInstaller.isolated 在冻结 exe 运行期抛出的
+    """冻结态兜底：中和 PyInstaller.isolated 在冻结 exe 运行期可能抛出的
     `function() argument 'code' must be code, not str` 崩溃。
 
-    根因：冻结后的 exe 会把 `PyInstaller.isolated.call` 误触发（部分库在导入/
-    运行期走到 isolated.call / @isolated.decorate），而冻结态下 func.__code__
-    经 marshal 往返解出 str 而非 code 对象，导致
-    PyInstaller/isolated/_child.py 的 `types.FunctionType(code, GLOBALS)` 抛 TypeError，
-    弹幕采集子线程直接“启动失败”。
-
-    该错误**只在冻结 exe(sys.frozen)出现**；源码 `python src/main.py` 下
-    `PyInstaller.isolated` 正常工作，不会触发。因此这里仅在 frozen 时注入一个
-    把 isolated.call 改为“当前进程内直接执行”的假模块，作为运行期兜底。
-    这样修复与打包脚本解耦：无论以后怎么打包，只要运行冻结 exe 就自带防护。
+    【历史备注】2026-09-21 已查明该报错的真正根因是 core/paths.py 曾用
+    普通函数全局替换 subprocess.Popen，导致 asyncio/windows_utils.py 的
+    `class Popen(subprocess.Popen):` 以 FunctionType 为元类建类而崩溃；
+    paths.py 已改为子类方式替换，本 shim 仅作为冻结态的冗余保险保留。
     """
     import types as _types
     _fake = _types.ModuleType("PyInstaller.isolated")
@@ -86,6 +80,12 @@ _MAX_UI_LINES = 1000
 _ui_pump_started = False
 _ui_after_id = None
 _lifecycle_lock = threading.Lock()
+# 仅统计指标模式（打开浏览器但不采弹幕文本）：采集器出口已过滤一次，
+# 这里作为第二道闸，防止旧采集器实例/异常路径漏发弹幕文本。
+# 注意：只丢 Chat/Member/Social 文本类；Like/Gift/Room 是界面上
+# 实时在线 / 累计点赞 / 礼物互动 三个统计位的数据源，必须放行。
+_metrics_only = False
+_DROP_MSG_TYPES = ("ChatMessage", "MemberMessage", "SocialMessage")
 
 
 def _as_messages(data) -> Iterable[dict]:
@@ -158,6 +158,10 @@ def process_message(message: dict):
     msg_type = str(message.get("type") or "")
     name = str(message.get("name") or "游客").strip() or "游客"
     content = str(message.get("content") or "").strip()
+
+    if _metrics_only and msg_type in _DROP_MSG_TYPES:
+        # 仅统计指标模式：丢弃弹幕文本类消息（第二道闸）。
+        return
 
     if msg_type == "SystemMessage":
         if content:
@@ -260,6 +264,7 @@ def _collector_worker(options, generation):
                 chrome_path=options.get("chrome_path") or None,
                 message_callback=enqueue_messages,
                 log_fn=lambda msg: enqueue_messages({"type": "SystemMessage", "content": msg}),
+                online_only=bool(options.get("metrics_only", False)),
             )
             with _lifecycle_lock:
                 if state.danmu_generation != generation:
@@ -295,6 +300,7 @@ def _collector_worker(options, generation):
 
 
 def _read_options():
+    global _metrics_only
     cfg = config.load_config()
     platform_widget = getattr(ui, "cmb_danmu_platform", None)
     url_widget = getattr(ui, "ent_danmu_url", None)
@@ -306,11 +312,14 @@ def _read_options():
     ui_url = url_widget.get().strip() if url_widget is not None else ""
     url = str(ui_url or cfg.get("danmu_url") or urls.get(platform) or "").strip().strip("'\"")
     headless = bool(headless_var.get()) if headless_var is not None else bool(cfg.get("danmu_headless", True))
+    metrics_only = bool(cfg.get("danmu_metrics_only", False))
+    _metrics_only = metrics_only
     return {
         "enabled": bool(cfg.get("danmu_enabled", True)),
         "platform": platform,
         "url": url,
         "headless": headless,
+        "metrics_only": metrics_only,
         "user_data_dir": str(cfg.get("danmu_user_data_dir") or "").strip(),
         "chrome_path": str(cfg.get("danmu_chrome_path") or "").strip(),
     }
@@ -348,6 +357,8 @@ def start_danmu_capture() -> bool:
         state.danmu_thread.start()
     _set_capture_ui("启动中", "#22d3ee", True)
     mode = "无窗口(headless)" if options["headless"] else "可见浏览器"
+    if options["metrics_only"]:
+        mode += "｜仅统计在线/点赞/礼物(不采弹幕)"
     ui.log_screen(f"【弹幕采集】▶ {options['platform']}｜{mode}｜{options['url']}")
     return True
 

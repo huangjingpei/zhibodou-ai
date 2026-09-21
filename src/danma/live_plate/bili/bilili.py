@@ -1,126 +1,174 @@
 import json
 import struct
-import urllib.parse
+import zlib
 import brotli
-from live_plate.Message import CreatChatMessage, CreatMemberMessage, CreatLikeMessage, CreatGiftMessage
+from live_plate.Message import (
+    CreatChatMessage,
+    CreatMemberMessage,
+    CreatLikeMessage,
+    CreatGiftMessage,
+    CreatSocialMessage,
+)
 
 
-def brotli_decode(bytes):
-    return brotli.decompress(bytes)
+def parse_cmd_message(msg):
+    """
+    解析 Bilibili 单个业务 JSON 字典，返回标准消息对象列表
+    """
+    if not isinstance(msg, dict):
+        return []
+
+    cmd = str(msg.get("cmd", ""))
+    # 处理带后缀或前缀的命令，例如 DANMU_MSG:4:0:2:2:2:0
+    if cmd.startswith("DANMU_MSG"):
+        try:
+            info = msg.get("info", [])
+            if isinstance(info, list) and len(info) > 1:
+                content = str(info[1])
+                user_info = info[2] if len(info) > 2 and isinstance(info[2], list) else []
+                name = str(user_info[1]) if len(user_info) > 1 else "B站用户"
+                avatar = ""
+                try:
+                    if len(info) > 0 and isinstance(info[0], list) and len(info[0]) > 15:
+                        avatar = str(info[0][15].get("user", {}).get("base", {}).get("face", ""))
+                except Exception:
+                    pass
+                return [CreatChatMessage(name=name, head_image=avatar, content=content)]
+            else:
+                data = msg.get("data", {})
+                name = str(data.get("uname") or data.get("name") or "B站用户")
+                content = str(data.get("msg") or data.get("content") or "")
+                if content:
+                    return [CreatChatMessage(name=name, head_image=str(data.get("uface", "")), content=content)]
+        except Exception:
+            return []
+
+    elif cmd == "INTERACT_WORD":
+        try:
+            data = msg.get("data", {})
+            name = str(data.get("uname", "B站老铁"))
+            msg_type = data.get("msg_type", 1)
+            # 1: 进场, 2: 关注, 3: 分享
+            if msg_type == 2:
+                return [CreatSocialMessage(name=name, head_image="")]
+            return [CreatMemberMessage(name=name, head_image="")]
+        except Exception:
+            return []
+
+    elif cmd == "LIKE_INFO_V3_CLICK":
+        # 用户点击点赞
+        try:
+            data = msg.get("data", {})
+            name = str(data.get("uname", "热心观众"))
+            count = data.get("click_count", 1) or 1
+            return [CreatLikeMessage(name=name, head_image="", count=count)]
+        except Exception:
+            return []
+
+    elif cmd == "LIKE_INFO_V3_UPDATE":
+        # 房间累计点赞总数更新广播（非单人点赞，忽略以避免刷屏）
+        return []
+
+    elif cmd == "SEND_GIFT":
+        try:
+            data = msg.get("data", {})
+            name = str(data.get("uname", "送礼老铁"))
+            gift_name = str(data.get("giftName", "礼物"))
+            num = int(data.get("num", 1) or 1)
+            face = str(data.get("face", ""))
+            return [CreatGiftMessage(name=name, head_image=face, gift_name=gift_name, gift_count=num)]
+        except Exception:
+            return []
+
+    elif cmd == "SUPER_CHAT_MESSAGE":
+        try:
+            data = msg.get("data", {})
+            user_info = data.get("user_info", {})
+            name = str(user_info.get("uname", "醒目留言用户"))
+            price = data.get("price", 0)
+            message = str(data.get("message", ""))
+            face = str(user_info.get("face", ""))
+            return [CreatChatMessage(name=f"醒目留言(¥{price}) {name}", head_image=face, content=message)]
+        except Exception:
+            return []
+
+    elif cmd == "ENTRY_EFFECT":
+        try:
+            data = msg.get("data", {})
+            copy_writing = str(data.get("copy_writing", ""))
+            if copy_writing:
+                clean_name = copy_writing.replace("<%", "").replace("%>", "").replace("进入直播间", "").strip()
+                return [CreatMemberMessage(name=clean_name or "贵宾用户", head_image="")]
+        except Exception:
+            return []
+
+    return []
+
+
+def _extract_packets(data: bytes):
+    """
+    底层递归解包，支持 Brotli (ver=3)、Zlib (ver=2)、明文 JSON (ver=0/1)
+    """
+    if not data or not isinstance(data, (bytes, bytearray)):
+        return []
+
+    extracted_msgs = []
+    offset = 0
+    data_len = len(data)
+
+    while offset + 16 <= data_len:
+        try:
+            packet_len, header_len, proto_ver, op, seq = struct.unpack_from(">IHHII", data, offset)
+        except Exception:
+            break
+
+        if packet_len < 16 or offset + packet_len > data_len:
+            break
+
+        body = data[offset + header_len : offset + packet_len]
+
+        if proto_ver == 3:
+            # Brotli 压缩包
+            try:
+                decompressed = brotli.decompress(body)
+                extracted_msgs.extend(_extract_packets(decompressed))
+            except Exception:
+                pass
+        elif proto_ver == 2:
+            # Zlib 压缩包
+            try:
+                decompressed = zlib.decompress(body)
+                extracted_msgs.extend(_extract_packets(decompressed))
+            except Exception:
+                pass
+        elif proto_ver in (0, 1):
+            if op == 5:
+                # 业务通知
+                try:
+                    text = body.decode("utf-8", errors="ignore")
+                    msg_obj = json.loads(text)
+                    items = parse_cmd_message(msg_obj)
+                    extracted_msgs.extend(items)
+                except Exception:
+                    pass
+            elif op == 3:
+                # 心跳/人气值回应
+                pass
+
+        offset += packet_len
+
+    return extracted_msgs
 
 
 def decode_packet(data):
-    u = None
-    res = struct.unpack_from('>i', data, 1)[0]
-    n = {'body': [], 'packetLen': res}
-    wsBinaryHeaderList = [
-        {
-            "name": "Header Length",
-            "key": "headerLen",
-            "bytes": 2,
-            "offset": 4,
-            "value": 16
-        },
-        {
-            "name": "Protocol Version",
-            "key": "ver",
-            "bytes": 2,
-            "offset": 6,
-            "value": 1
-        },
-        {
-            "name": "Operation",
-            "key": "op",
-            "bytes": 4,
-            "offset": 8,
-            "value": 7
-        },
-        {
-            "name": "Sequence Id",
-            "key": "seq",
-            "bytes": 4,
-            "offset": 12,
-            "value": 1
-        }
-    ]
-    for t in wsBinaryHeaderList:
-        if t['bytes'] == 4:
-            n[t['key']] = struct.unpack_from('>i', data, t['offset'])[0]
-        elif t['bytes'] == 2:
-            n[t['key']] = struct.unpack_from('>h', data, t['offset'])[0]
+    """
+    接收 WebSocket 二进制 frame，返回 dict 包含 listmessage
+    """
+    if isinstance(data, str):
+        return {"body": [], "listmessage": []}
 
-    if n['packetLen'] < len(list(data)):
-        decode_packet(bytes(list(data)[:n['packetLen']]))
-    if n['op'] and n['op'] in (5, 8):
-        pass
-    if n['op'] == 3:
-        n['body'] = {'count': struct.unpack_from('>i', data, 4)[0]}
-        return n
-
-    for i in range(0, len(list(data)), n['packetLen']):
-        s = struct.unpack_from('>i', data, i)[0]
-        a = struct.unpack_from('>h', data, i + 4)[0]
-        if n['ver'] == 0:
-            try:
-                c = bytes(list(data)[i + a:i + s]).decode(encoding='utf-8')
-                u = json.loads(c) if c else None
-
-            except Exception as e:
-                pass
-
-        elif n['ver'] == 3:
-            datas = list(data)[i + a:i + s]
-            res = brotli_decode(bytes(datas))
-            u = decode_packet(res)['body']
-
-        if u:
-            n['body'].append(u)
-    res = n['body']
-
-    listmessage = []
-
-    if type(res) == list and len(res) > 0:
-        res = res[0]
-        if type(res) == list:
-            new_li = []
-            for i in res:
-                if i not in new_li:
-                    new_li.append(i)
-            for msg in new_li:
-                if msg['cmd'] == 'DANMU_MSG':
-                    name = msg['info'][2][1]
-
-                    content = msg['info'][1]
-                    listmessage.append(CreatChatMessage(name=name, head_image="", content=content))
-
-
-                elif msg['cmd'] == 'INTERACT_WORD':
-                    name = msg['data']['uname']
-
-                    listmessage.append(CreatMemberMessage(name=name, head_image=""))
-
-                elif msg['cmd'] == 'LIKE_INFO_V3_CLICK':
-                    name = msg['data']['uname']
-
-                    listmessage.append(CreatLikeMessage(name=name, head_image='', count=1))
-
-
-
-
-                elif msg['cmd'] == 'SEND_GIFT':
-                    name = msg['data']['uname']
-                    conetnt = '送礼'
-
-                    giftName = msg['data']['giftName']
-                    num = msg['data']['num']
-
-                    listmessage.append(CreatGiftMessage(name=name, head_image='', gift_name=giftName, gift_count=num))
-
-                else:
-                    print(msg)
-    n['listmessage'] = listmessage
-
-    return n
+    msgs = _extract_packets(data)
+    return {"body": [], "listmessage": msgs}
 
 
 if __name__ == '__main__':

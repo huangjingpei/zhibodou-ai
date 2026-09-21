@@ -117,7 +117,7 @@ if _HIDE_WIN_FLAGS:
     def _exe_is_external(args, executable):
         target = executable or (args[0] if isinstance(args, (list, tuple)) and args else "")
         s = str(target).lower().replace("\\", "/")
-        return "/adb" in s or s.endswith("adb") or "scrcpy" in s
+        return "/adb" in s or s.endswith("adb") or s.endswith("adb.exe") or "scrcpy" in s
 
     def _patched_run(*a, **k):
         if (a or "args" in k) and "creationflags" not in k:
@@ -126,12 +126,22 @@ if _HIDE_WIN_FLAGS:
                 k["creationflags"] = _HIDE_WIN_FLAGS
         return _orig_run(*a, **k)
 
-    def _patched_popen(*a, **k):
-        if (a or "args" in k) and "creationflags" not in k:
-            args = k.get("args", a[0] if a else None)
-            if _exe_is_external(args, k.get("executable")):
-                k["creationflags"] = _HIDE_WIN_FLAGS
-        return _orig_popen(*a, **k)
+    class _PatchedPopen(_orig_popen):
+        """以子类形式替换 subprocess.Popen。
+
+        注意：绝不能用普通函数替换 Popen！标准库 asyncio/windows_utils.py
+        有 `class Popen(subprocess.Popen):`，若 Popen 变成函数，Python 会拿
+        FunctionType 当元类建类，抛出
+        `function() argument 'code' must be code, not str`，
+        导致 playwright/asyncio 在弹幕采集线程里导入即崩。
+        """
+
+        def __init__(self, *args, **kwargs):
+            if "creationflags" not in kwargs:
+                _args = kwargs.get("args", args[0] if args else None)
+                if _exe_is_external(_args, kwargs.get("executable")):
+                    kwargs["creationflags"] = _HIDE_WIN_FLAGS
+            super().__init__(*args, **kwargs)
 
     _sp.run = _patched_run
-    _sp.Popen = _patched_popen
+    _sp.Popen = _PatchedPopen
