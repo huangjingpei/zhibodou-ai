@@ -154,6 +154,25 @@ def _append_danmu(name, content, event=""):
         pass
 
 
+def _dispatch_ai_reply(message: dict):
+    """将有效弹幕或礼物推入 AI 决策与语音流工作线程。"""
+    try:
+        cfg = config.load_config() or {}
+        enabled = bool(cfg.get("ai_danmu_reply_enabled", False))
+        if getattr(ui, "var_ai_reply", None) is not None:
+            enabled = bool(ui.var_ai_reply.get())
+        if not enabled:
+            return
+
+        from danma.ai_reply_worker import get_ai_reply_worker
+        worker = get_ai_reply_worker()
+        if not worker.running:
+            worker.start()
+        worker.enqueue_message(message)
+    except Exception:
+        pass
+
+
 def process_message(message: dict):
     """在 Tk 主线程处理一条采集器标准消息。"""
     msg_type = str(message.get("type") or "")
@@ -193,6 +212,7 @@ def process_message(message: dict):
         gift_name = str(message.get("gift_name") or "礼物")
         _set_label(ui.lab_gift, f"🎁礼物：{state.gift_cnt}")
         _append_danmu(name, f"{gift_name} × {count}", "🎁")
+        _dispatch_ai_reply(message)
         return
     if msg_type == "ChatMessage":
         if not content:
@@ -201,6 +221,7 @@ def process_message(message: dict):
         state.last_danmu_text = content
         _set_capture_ui("接收中", "#34d399", True)
         _append_danmu(name, content)
+        _dispatch_ai_reply(message)
         return
     if msg_type == "MemberMessage":
         _append_danmu(name, content or "进入直播间", "👋")
@@ -374,6 +395,11 @@ def stop_danmu_capture():
         collector.browser_close()
     if was_running:
         ui.log_screen("【弹幕采集】⏹ 已请求停止。")
+    try:
+        from danma.ai_reply_worker import get_ai_reply_worker
+        get_ai_reply_worker().stop()
+    except Exception:
+        pass
     _set_capture_ui("已停止", "#9ca3af", False)
 
 

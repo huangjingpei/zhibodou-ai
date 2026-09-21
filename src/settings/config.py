@@ -54,6 +54,11 @@ DEFAULT_CFG = {
     # 需要登录的创作者后台首次应把 headless 改为 False，扫码/登录成功后再改回 True；
     # 登录状态保存在独立用户目录中，不要提交到版本库。
     "danmu_enabled": True,
+    # AI 智能弹幕回复配置（DeepSeek 意图过滤与本地 Ollama 兼容）
+    "ai_danmu_reply_enabled": False,
+    "deepseek_api_key": "",
+    "deepseek_api_base": "https://api.deepseek.com",
+    "deepseek_model": "deepseek-chat",
     # 已废弃：平台类型改由 danma/platform_detect.py 按 URL 域名自动识别，
     # UI 不再有平台下拉框；此键仅为兼容旧 config.json 保留，运行时不再读取。
     "danmu_platform": "douyin",
@@ -164,6 +169,13 @@ def save_config():
             "danmu_url": ent_danmu_url.get().strip(),
             "doubao_language": cmb_doubao_lang.get().strip() or "普通话",
         })
+        from gui import ui as _ui
+        if getattr(_ui, "var_ai_reply", None) is not None:
+            d["ai_danmu_reply_enabled"] = bool(_ui.var_ai_reply.get())
+        if getattr(_ui, "ent_deepseek_key", None) is not None:
+            d["deepseek_api_key"] = str(_ui.ent_deepseek_key.get() or "").strip()
+        if getattr(_ui, "ent_deepseek_url", None) is not None:
+            d["deepseek_api_base"] = str(_ui.ent_deepseek_url.get() or "").strip() or "https://api.deepseek.com"
         with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         try:

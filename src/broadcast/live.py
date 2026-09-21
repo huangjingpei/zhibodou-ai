@@ -551,3 +551,14 @@ def stop_live():
     if ui.lab_count:
         ui.lab_count.config(text="✅可以执行下一轮")
     ui.log_screen("【直播控制】⏹ 自动直播已停止，虚拟声卡与弹幕采集已释放，手机声音已停止播放。")
+
+
+def is_doubao_speaking() -> bool:
+    """供外部（如 AI 弹幕回复）判断豆包当前是否正处于播报或语音状态。"""
+    with _round_lock:
+        return (
+            getattr(state, "is_broadcasting", False)
+            and not can_next_speak
+            and _current_monitor is not None
+        )
+

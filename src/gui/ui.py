@@ -79,6 +79,11 @@ lab_txt2_info = None
 lab_txt3_info = None
 btn_close_notepads = None
 ent_interval = None
+cmb_danmu_mode = None
+ent_deepseek_key = None
+ent_deepseek_url = None
+chk_ai_reply = None
+var_ai_reply = None
 
 
 # VAD 每秒约 50 帧；工作线程只覆盖最新值，由 Tk 主线程以 20 FPS 合并绘制。
@@ -283,6 +288,7 @@ def build_ui():
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
     global btn_open_txt1, btn_open_txt2, btn_open_txt3
     global lab_txt1_info, lab_txt2_info, lab_txt3_info, btn_close_notepads
+    global cmb_danmu_mode, ent_deepseek_key, ent_deepseek_url, chk_ai_reply, var_ai_reply
 
     _shutting_down = False
     _volume_poll_started = False
@@ -426,6 +432,75 @@ def build_ui():
     btn_danmu = theme.button(actions, "启动弹幕", color=theme.PRIMARY,
                              active=theme.PRIMARY_HOVER, width=9)
     btn_danmu.pack(side=tk.LEFT)
+
+    _section_label(cfg, "AI回复模式", 2, 0, padx=(0, 8), pady=4, sticky="w")
+    from danma.hardware import ALL_MODE_DISPLAYS
+    cmb_danmu_mode = ttk.Combobox(
+        cfg, style="Zhibodou.TCombobox",
+        values=ALL_MODE_DISPLAYS, width=28, state="readonly",
+    )
+    cmb_danmu_mode.grid(row=2, column=1, padx=(0, 12), pady=3, sticky="ew")
+
+    _section_label(cfg, "DeepSeek Key", 2, 2, padx=(0, 8), pady=4, sticky="w")
+    f_llm = tk.Frame(cfg, bg=theme.SURFACE)
+    f_llm.grid(row=2, column=3, padx=(0, 10), pady=3, sticky="ew")
+    ent_deepseek_key = theme.entry(f_llm, width=16)
+    ent_deepseek_key.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    theme.label(f_llm, "地址", muted=True, font_size=8).pack(side=tk.LEFT, padx=(6, 2))
+    ent_deepseek_url = theme.entry(f_llm, width=20)
+    ent_deepseek_url.pack(side=tk.LEFT)
+
+    var_ai_reply = tk.BooleanVar(value=False)
+    chk_ai_reply = tk.Checkbutton(
+        cfg, text="开启回复", variable=var_ai_reply,
+        bg=theme.SURFACE, fg=theme.TEXT, selectcolor=theme.SURFACE_SOFT,
+        activebackground=theme.SURFACE, activeforeground=theme.TEXT,
+        font=theme.font(9),
+    )
+    chk_ai_reply.grid(row=2, column=4, pady=4, sticky="e")
+
+    _section_label(cfg, "OBS音频源", 3, 0, padx=(0, 8), pady=4, sticky="w")
+    f_obs = tk.Frame(cfg, bg=theme.SURFACE)
+    f_obs.grid(row=3, column=1, padx=(0, 12), pady=3, sticky="ew")
+    ent_obs_stream = theme.entry(f_obs, width=22)
+    ent_obs_stream.insert(0, "http://127.0.0.1:8554/danmu_audio")
+    ent_obs_stream.config(state="readonly")
+    ent_obs_stream.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    def _copy_obs_stream():
+        import pyperclip
+        pyperclip.copy("http://127.0.0.1:8554/danmu_audio")
+        log_screen("【OBS配置】已复制浏览器源地址到剪贴板，OBS添加「浏览器」填入并勾选「通过OBS控制音频」即可。")
+
+    btn_copy_obs = theme.button(f_obs, "复制", color=theme.SURFACE_SOFT,
+                                active=theme.SURFACE_HOVER, width=5,
+                                command=_copy_obs_stream)
+    btn_copy_obs.pack(side=tk.LEFT, padx=(4, 0))
+
+    lab_obs_tip = theme.label(
+        cfg, "OBS 添加「浏览器」-> 填入 URL -> 勾选「通过 OBS 控制音频」",
+        muted=True, font_size=8,
+    )
+    lab_obs_tip.grid(row=3, column=2, columnspan=2, padx=(0, 10), pady=4, sticky="w")
+
+    def _test_ai_speech():
+        def _do_test():
+            from danma.ai_reply_worker import get_ai_reply_worker
+            worker = get_ai_reply_worker()
+            worker.start()
+            sample_msg = {
+                "type": "ChatMessage",
+                "name": "测试观众",
+                "content": "请问今天拍下几天可以发货？有现货吗？",
+            }
+            log_screen("【AI弹幕回复】触发测试弹幕模拟: '请问今天拍下几天可以发货？'")
+            worker.enqueue_message(sample_msg)
+        threading.Thread(target=_do_test, daemon=True).start()
+
+    btn_test_speech = theme.button(cfg, "测试回复", color=theme.SURFACE_SOFT,
+                                   active=theme.SURFACE_HOVER, width=9,
+                                   command=_test_ai_speech)
+    btn_test_speech.grid(row=3, column=4, pady=4, sticky="e")
 
     # 两块策略内容并排，既保留完整信息密度，也让 800px 高度的常见屏幕
     # 能完整看到实时弹幕、运行日志与直播状态。
@@ -629,6 +704,23 @@ def build_ui():
     ent_r3max.insert(0, cfg_load["r3_max"])
     ent_cmd3.insert(0, cfg_load["cmd3"])
     refresh_script_labels()
+
+    # AI 弹幕回复硬件探测与配置回填
+    try:
+        from danma.hardware import detect_gpu_tier
+        detected = detect_gpu_tier()
+        if cmb_danmu_mode:
+            cmb_danmu_mode.set(detected["display_name"])
+        log_screen(f"【硬件探测】{detected['summary']}")
+    except Exception:
+        pass
+
+    if ent_deepseek_key:
+        ent_deepseek_key.insert(0, str(cfg_load.get("deepseek_api_key") or ""))
+    if ent_deepseek_url:
+        ent_deepseek_url.insert(0, str(cfg_load.get("deepseek_api_base") or "https://api.deepseek.com"))
+    if var_ai_reply:
+        var_ai_reply.set(bool(cfg_load.get("ai_danmu_reply_enabled", False)))
 
 
 def refresh_script_labels():
