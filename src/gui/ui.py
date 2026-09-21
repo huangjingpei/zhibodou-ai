@@ -34,15 +34,13 @@ btn_meet = None
 btn_logout = None
 btn_live_start = None
 btn_live_stop = None
-btn_audio_mode = None
 btn_cap = None
 btn_pwd = None
 btn_auth = None
 btn_save = None
 btn_danmu = None
-cmb_danmu_platform = None
 ent_danmu_url = None
-var_danmu_headless = None
+cmb_doubao_lang = None
 ent_prod_name = None
 ent_prod_desc = None
 ent_r1min = None
@@ -251,9 +249,9 @@ def build_ui():
     global root, lab_sys_status, lab_online, lab_like, lab_gift, lab_cap_status
     global lab_count, lab_danmu_status, lab_auth_status, lab_auth_detail
     global embed_container, txt_danmu, txt_screen_log, txt_pre_meet
-    global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_audio_mode, btn_cap
+    global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_cap
     global btn_pwd, btn_auth, btn_save, btn_danmu, btn_logout
-    global cmb_danmu_platform, ent_danmu_url, var_danmu_headless
+    global ent_danmu_url, cmb_doubao_lang
     global volume_canvas, lab_vad_state, _volume_poll_started, _volume_after_id, _shutting_down
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
@@ -375,25 +373,13 @@ def build_ui():
                             active=theme.PRIMARY_HOVER, width=9)
     btn_save.grid(row=0, column=4, pady=4, sticky="e")
 
-    _section_label(cfg, "弹幕平台", 1, 0, padx=(0, 8), pady=4, sticky="w")
-    cmb_danmu_platform = ttk.Combobox(
-        cfg, style="Zhibodou.TCombobox",
-        values=("douyin", "kuaishou", "bili", "tiktok", "shipinhao", "xhs", "tb", "pdd", "facebook"),
-        width=12, state="readonly",
-    )
-    cmb_danmu_platform.grid(row=1, column=1, padx=(0, 12), pady=4, sticky="w")
-    _section_label(cfg, "直播间", 1, 2, padx=(0, 8), pady=4, sticky="w")
+    _section_label(cfg, "直播间", 1, 0, padx=(0, 8), pady=4, sticky="w")
     ent_danmu_url = theme.entry(cfg)
-    ent_danmu_url.grid(row=1, column=3, padx=(0, 10), pady=3, sticky="ew", ipady=3)
+    # 平台类型由 danma 按域名自动识别，无窗口(headless)抓不到弹幕——
+    # 两者均不再进 UI，"启动弹幕"只需要直播间地址。
+    ent_danmu_url.grid(row=1, column=1, columnspan=3, padx=(0, 10), pady=3, sticky="ew", ipady=3)
     actions = tk.Frame(cfg, bg=theme.SURFACE)
     actions.grid(row=1, column=4, pady=4, sticky="e")
-    var_danmu_headless = tk.BooleanVar(value=True)
-    tk.Checkbutton(
-        actions, text="无窗口", variable=var_danmu_headless,
-        bg=theme.SURFACE, fg=theme.TEXT_SOFT, selectcolor=theme.SURFACE_ALT,
-        activebackground=theme.SURFACE, activeforeground=theme.TEXT,
-        highlightthickness=0, bd=0, font=theme.font(10),
-    ).pack(side=tk.LEFT, padx=(0, 6))
     btn_danmu = theme.button(actions, "启动弹幕", color=theme.PRIMARY,
                              active=theme.PRIMARY_HOVER, width=9)
     btn_danmu.pack(side=tk.LEFT)
@@ -439,22 +425,28 @@ def build_ui():
 
     ctrl_card, controls = theme.card(ui_right, "直播控制与音频活动", accent=theme.PRIMARY, pady=8)
     ctrl_card.pack(fill=tk.X, pady=(0, 6))
-    btn_audio_mode = theme.button(controls, "外音模式 · TTS", color=theme.SURFACE_SOFT,
-                                  active=theme.BORDER_FOCUS, width=15, state=tk.DISABLED)
-    btn_audio_mode.grid(row=0, column=0, padx=(0, 8), pady=2)
+    # 语言选择（最左）：所选语言/方言会作为提示词约束注入每次发给豆包的话术，
+    # 让豆包按对应语言播报。选完即生效（发送时实时读取），「保存配置」持久化。
+    theme.label(controls, "语言", muted=True, font_size=9).grid(
+        row=0, column=0, padx=(0, 4), pady=2, sticky="w")
+    cmb_doubao_lang = ttk.Combobox(
+        controls, style="Zhibodou.TCombobox",
+        values=config.DOUBAO_LANGUAGES, width=11, state="readonly",
+    )
+    cmb_doubao_lang.grid(row=0, column=1, padx=(0, 12), pady=2, sticky="w")
     btn_live_start = theme.button(controls, "启动直播", color="#16845A",
                                   active=theme.GREEN, width=10, state=tk.DISABLED)
-    btn_live_start.grid(row=0, column=1, padx=4, pady=2)
+    btn_live_start.grid(row=0, column=2, padx=4, pady=2)
     btn_live_stop = theme.button(controls, "停止直播", color=theme.RED_DARK,
                                  active=theme.RED, width=10, state=tk.DISABLED)
-    btn_live_stop.grid(row=0, column=2, padx=4, pady=2)
+    btn_live_stop.grid(row=0, column=3, padx=4, pady=2)
     lab_count = theme.label(controls, "下一轮 · 已就绪", fg=theme.CYAN,
                             bold=True, font_size=9, anchor="w")
-    lab_count.grid(row=0, column=3, padx=(14, 0), sticky="w")
-    controls.grid_columnconfigure(3, weight=1)
+    lab_count.grid(row=0, column=4, padx=(14, 0), sticky="w")
+    controls.grid_columnconfigure(4, weight=1)
 
     meter_row = tk.Frame(controls, bg=theme.SURFACE)
-    meter_row.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+    meter_row.grid(row=1, column=0, columnspan=6, sticky="ew", pady=(6, 0))
     theme.label(meter_row, "VAD", muted=True, bold=True, font_size=8).pack(side=tk.LEFT, padx=(0, 8))
     volume_canvas = tk.Canvas(meter_row, width=300, height=14, bg=theme.SURFACE_SOFT,
                               bd=0, highlightthickness=0)
@@ -521,20 +513,16 @@ def build_ui():
     lab_gift = _metric("礼物互动", "0", theme.AMBER)
 
     cfg_load = config.load_config()
-    danmu_platform = str(cfg_load.get("danmu_platform") or "douyin")
-    danmu_urls = cfg_load.get("danmu_urls") or {}
-    danmu_url = str(cfg_load.get("danmu_url") or danmu_urls.get(danmu_platform) or "")
-    cmb_danmu_platform.set(danmu_platform)
+    # 预填直播间地址：优先用户上次填的 danmu_url，否则按旧配置的平台键取默认地址。
+    _fallback_platform = str(cfg_load.get("danmu_platform") or "douyin")
+    _danmu_urls = cfg_load.get("danmu_urls") or {}
+    danmu_url = str(cfg_load.get("danmu_url") or _danmu_urls.get(_fallback_platform) or "")
     ent_danmu_url.insert(0, danmu_url)
-    var_danmu_headless.set(bool(cfg_load.get("danmu_headless", True)))
-
-    def _platform_changed(_event=None):
-        current = ent_danmu_url.get().strip()
-        if not current or current in set(danmu_urls.values()):
-            ent_danmu_url.delete(0, tk.END)
-            ent_danmu_url.insert(0, danmu_urls.get(cmb_danmu_platform.get(), ""))
-
-    cmb_danmu_platform.bind("<<ComboboxSelected>>", _platform_changed)
+    # 主播语言回填（所选值在豆包发送时实时生效，见 broadcast/live.py）
+    _lang = str(cfg_load.get("doubao_language") or "普通话")
+    if _lang not in config.DOUBAO_LANGUAGES:
+        _lang = "普通话"
+    cmb_doubao_lang.set(_lang)
     ent_prod_name.insert(0, cfg_load["product_name"])
     ent_prod_desc.insert(0, cfg_load["product_desc"])
     txt_pre_meet.insert(tk.END, cfg_load["pre_meet_text"])

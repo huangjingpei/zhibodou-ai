@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import messagebox
 from gui import theme
 from pdk import auth_service as pdk_auth
+from pdk import credential_store
 from pdk.pdk_client import PdkClientError
 
 # ====================== 字体层级系统（Typography Scale） ======================
@@ -117,7 +118,11 @@ class LoginWindow:
         self.tabs = {}               # tab_key -> {btn, frame}
         self.active_key = "login"
         self._underline_pos = None      # 下划线上次位置，用于防抖去重
-        self._remember_hint_var = tk.StringVar(value="登录状态仅保留在本次运行中")
+        # 记住的登录凭据（上次成功登录时保存，见 pdk/credential_store.py）
+        self._saved_creds = credential_store.load()
+        _hint = ("已记住账号密码，下次自动填充" if self._saved_creds.get("phone")
+                 else "登录状态仅保留在本次运行中")
+        self._remember_hint_var = tk.StringVar(value=_hint)
         self._auth_busy = False
         # 每个 tab 的字段引用：{account_entry, password_entry, ...}
         self._login_fields  = {}
@@ -348,10 +353,13 @@ class LoginWindow:
         entry.delete(0, tk.END)
         entry.insert(0, value)
         entry.config(fg=CLR_TEXT)
+        if getattr(entry, "_is_pwd", False):
+            # 默认使用星号掩码；若用户已点开眼睛明文则跟随状态
+            entry.config(show="" if getattr(entry, "_pwd_visible", False) else "*")
 
     def _build_input_field(self, parent, icon_key, placeholder,
                            show=None, width_px=None):
-        """构造"自绘图标 + placeholder + focus 高亮边框"的输入行。
+        """构造"自绘图标 + placeholder + focus 高亮边框 + 密码眼睛显隐"的输入行。
 
         icon_key: 'user' / 'lock' / 'key' / 'card'（见 ICON_PAINTERS）
         返回 (外层 frame, entry)。
@@ -375,16 +383,50 @@ class LoginWindow:
             if painter:
                 painter(icon_canvas, ICON_SIZE, color)
 
+        is_password = (show == "*")
+        pwd_state = {"visible": False}
+
+        if is_password:
+            eye_canvas = tk.Canvas(wrap, width=20, height=20,
+                                   bg=CLR_INPUT_BG, bd=0, highlightthickness=0,
+                                   cursor="hand2")
+            eye_canvas.pack(side=tk.RIGHT, padx=(4, 12))
+
+            def _paint_eye(color=None):
+                c = color or (CLR_TAB_ACTIVE if pwd_state["visible"] else CLR_ICON)
+                _draw_eye_icon(eye_canvas, 20, c, pwd_state["visible"])
+
+            def _on_eye_click(_e=None):
+                pwd_state["visible"] = not pwd_state["visible"]
+                entry._pwd_visible = pwd_state["visible"]
+                _paint_eye()
+                if entry.get() != placeholder:
+                    entry.config(show="" if pwd_state["visible"] else "*")
+                entry.focus_set()
+
+            def _on_eye_enter(_e=None):
+                _paint_eye(CLR_INPUT_FOCUS)
+
+            def _on_eye_leave(_e=None):
+                _paint_eye()
+
+            eye_canvas.bind("<Button-1>", _on_eye_click)
+            eye_canvas.bind("<Enter>", _on_eye_enter)
+            eye_canvas.bind("<Leave>", _on_eye_leave)
+            _paint_eye()
+
         entry = tk.Entry(wrap, bd=0, bg=CLR_INPUT_BG, fg=CLR_TEXT_HINT,
                          font=f(FS_BODY),
                          insertbackground=CLR_TEXT,
                          relief="flat", highlightthickness=0)
+        entry._is_pwd = is_password
+        entry._pwd_visible = False
         if width_px:
             entry.configure(width=width_px)
-        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 12), pady=12)
+        entry_right_pad = 4 if is_password else 12
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, entry_right_pad), pady=12)
         entry.insert(0, placeholder)
-        if not show:
-            entry.config(show="")
+        entry.config(show="")
 
         def _on_focus_in(_e=None):
             wrap.config(highlightbackground=CLR_INPUT_FOCUS,
@@ -392,7 +434,11 @@ class LoginWindow:
             _paint_icon(CLR_ICON_FOCUS)
             if entry.get() == placeholder:
                 entry.delete(0, tk.END)
-                entry.config(fg=CLR_TEXT, show=show or "")
+                entry.config(fg=CLR_TEXT)
+                if is_password:
+                    entry.config(show="" if pwd_state["visible"] else "*")
+                elif show:
+                    entry.config(show=show)
 
         def _on_focus_out(_e=None):
             wrap.config(highlightbackground=CLR_INPUT_BORDER)
@@ -400,11 +446,14 @@ class LoginWindow:
             if not entry.get():
                 entry.insert(0, placeholder)
                 entry.config(fg=CLR_TEXT_HINT, show="")
+            elif is_password:
+                entry.config(show="" if pwd_state["visible"] else "*")
 
         entry.bind("<FocusIn>", _on_focus_in)
         entry.bind("<FocusOut>", _on_focus_out)
         _paint_icon(CLR_ICON)   # 初始为灰色
         return wrap, entry
+
 
     def _build_rounded_button(self, parent, text, fill, cmd,
                               height=48, font_size=14, radius=12):
@@ -476,10 +525,13 @@ class LoginWindow:
         tab.pack(fill=tk.BOTH, expand=True)
         _, account = self._build_input_field(tab, "user", "请输入手机号")
         _, password = self._build_input_field(tab, "lock", "请输入密码", show="*")
-        if os.getenv("PDK_PHONE"):
-            self._set_field_value(account, os.getenv("PDK_PHONE", ""))
-        if os.getenv("PDK_PASSWORD"):
-            self._set_field_value(password, os.getenv("PDK_PASSWORD", ""))
+        # 预填优先级：本地记住的凭据 > 环境变量（PDK_PHONE/PDK_PASSWORD）
+        _saved_phone = self._saved_creds.get("phone") or os.getenv("PDK_PHONE", "")
+        _saved_pwd = self._saved_creds.get("password") or os.getenv("PDK_PASSWORD", "")
+        if _saved_phone:
+            self._set_field_value(account, _saved_phone)
+        if _saved_pwd:
+            self._set_field_value(password, _saved_pwd)
         self._login_fields = {"account": account, "password": password}
 
         # 记住登录状态 + 换绑设备 行
@@ -520,12 +572,16 @@ class LoginWindow:
         _, account = self._build_input_field(tab, "user", "请输入手机号")
         _, password = self._build_input_field(tab, "lock", "请输入密码", show="*")
         _, license_key = self._build_input_field(tab, "card", "请输入卡密")
-        if os.getenv("PDK_PHONE"):
-            self._set_field_value(account, os.getenv("PDK_PHONE", ""))
-        if os.getenv("PDK_PASSWORD"):
-            self._set_field_value(password, os.getenv("PDK_PASSWORD", ""))
-        if os.getenv("PDK_CARD_KEY"):
-            self._set_field_value(license_key, os.getenv("PDK_CARD_KEY", ""))
+        # 预填优先级：本地记住的凭据 > 环境变量（PDK_PHONE/PDK_PASSWORD/PDK_CARD_KEY）
+        _saved_phone = self._saved_creds.get("phone") or os.getenv("PDK_PHONE", "")
+        _saved_pwd = self._saved_creds.get("password") or os.getenv("PDK_PASSWORD", "")
+        _saved_key = self._saved_creds.get("card_key") or os.getenv("PDK_CARD_KEY", "")
+        if _saved_phone:
+            self._set_field_value(account, _saved_phone)
+        if _saved_pwd:
+            self._set_field_value(password, _saved_pwd)
+        if _saved_key:
+            self._set_field_value(license_key, _saved_key)
         self._active_fields = {"account": account, "password": password, "license": license_key}
         self._build_rounded_button(
             tab, "立即兑换", CLR_BTN_ACTIVE, cmd=self._do_activate,
@@ -563,7 +619,8 @@ class LoginWindow:
                     pass
                 return
             try:
-                self.parent.after(0, lambda r=result: self._auth_succeeded(r))
+                self.parent.after(0,
+                                  lambda r=result: self._auth_succeeded(r, phone, password, card_key))
             except tk.TclError:
                 pass
 
@@ -571,27 +628,31 @@ class LoginWindow:
 
     def _auth_failed(self, exc, phone, password):
         self._auth_busy = False
-        self._remember_hint_var.set("登录状态仅保留在本次运行中")
+        self._remember_hint_var.set(
+            "已记住账号密码，下次自动填充" if self._saved_creds.get("phone")
+            else "登录状态仅保留在本次运行中")
         self._notice("PDK 登录失败\n\n" + pdk_auth.format_error(exc), error=True)
         if isinstance(exc, PdkClientError) and exc.code == 40380:
             self._switch_tab("active")
             self._set_field_value(self._active_fields["account"], phone)
             self._set_field_value(self._active_fields["password"], password)
 
-    def _auth_succeeded(self, result):
+    def _auth_succeeded(self, result, phone="", password="", card_key=""):
         self._auth_busy = False
-        self._remember_hint_var.set("PDK 会话已验证")
-        self._notice("登录成功\n%s\n正在进入主控台…" % result.display_detail())
-        self.parent.after(150, self.on_success)
+        # 登录/激活成功 → 把凭据写入本地配置文件，下次启动自动回填。
+        # 保存失败不影响登录流程（credential_store 内部已静默吞异常）。
+        if credential_store.save(phone, password, card_key):
+            self._saved_creds = credential_store.load()
+            self._remember_hint_var.set("已记住账号密码，下次自动填充")
+        # 登录成功直接进入主控台，不弹窗阻断用户
+        self.parent.after(50, self.on_success)
 
     # ------------------------ 消息提示 ------------------------
     def _notice(self, msg, error=False):
-        """统一弹提示：error=True 用 showerror，否则 showinfo。
+        """统一弹提示：仅在 error=True 时弹出错误提示框，成功时静默放行。
         注意：必须在主线程调用；若被业务线程调用，要先 .after 到主线程。"""
         if error:
             messagebox.showerror("提示", msg, parent=self.parent)
-        else:
-            messagebox.showinfo("提示", msg, parent=self.parent)
 
     def _on_window_close(self):
         try:
@@ -650,6 +711,33 @@ def _draw_card_icon(canvas, size, color):
                        fill=color, width=1.5)
     canvas.create_line(s * 0.24, s * 0.60, s * 0.60, s * 0.60,
                        fill=color, width=1.5)
+
+
+def _draw_eye_icon(canvas, size, color, visible):
+    """眼睛图标：睁眼(明文可见) vs 闭眼/斜杠(掩码隐藏)。"""
+    canvas.delete("all")
+    s = size
+    cx, cy = s / 2, s / 2
+    if visible:
+        # 睁眼：上下轮廓弧 + 中心实心瞳孔
+        canvas.create_arc(cx - s * 0.44, cy - s * 0.42, cx + s * 0.44, cy + s * 0.52,
+                          start=28, extent=124, style=tk.ARC, outline=color, width=1.5)
+        canvas.create_arc(cx - s * 0.44, cy - s * 0.52, cx + s * 0.44, cy + s * 0.42,
+                          start=208, extent=124, style=tk.ARC, outline=color, width=1.5)
+        pr = s * 0.16
+        canvas.create_oval(cx - pr, cy - pr, cx + pr, cy + pr,
+                           fill=color, outline="")
+    else:
+        # 闭眼/斜杠眼：眼睛轮廓 + 瞳孔圆圈 + 贯穿斜线
+        canvas.create_arc(cx - s * 0.44, cy - s * 0.42, cx + s * 0.44, cy + s * 0.52,
+                          start=28, extent=124, style=tk.ARC, outline=color, width=1.5)
+        canvas.create_arc(cx - s * 0.44, cy - s * 0.52, cx + s * 0.44, cy + s * 0.42,
+                          start=208, extent=124, style=tk.ARC, outline=color, width=1.5)
+        pr = s * 0.14
+        canvas.create_oval(cx - pr, cy - pr, cx + pr, cy + pr,
+                           outline=color, width=1.2)
+        canvas.create_line(cx - s * 0.40, cy - s * 0.38, cx + s * 0.40, cy + s * 0.38,
+                           fill=color, width=1.8)
 
 
 ICON_PAINTERS = {

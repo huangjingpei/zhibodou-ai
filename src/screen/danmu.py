@@ -73,6 +73,7 @@ def _dump_launch_traceback(exc: BaseException) -> None:
 from core import state
 from gui import theme, ui
 from settings import config
+from danma.platform_detect import detect_platform as _detect_platform
 
 _UI_POLL_MS = 100
 _UI_BATCH_SIZE = 100
@@ -302,16 +303,14 @@ def _collector_worker(options, generation):
 def _read_options():
     global _metrics_only
     cfg = config.load_config()
-    platform_widget = getattr(ui, "cmb_danmu_platform", None)
     url_widget = getattr(ui, "ent_danmu_url", None)
-    headless_var = getattr(ui, "var_danmu_headless", None)
-    platform = str(
-        platform_widget.get() if platform_widget is not None else cfg.get("danmu_platform") or "douyin"
-    ).strip().lower()
-    urls = cfg.get("danmu_urls") or {}
     ui_url = url_widget.get().strip() if url_widget is not None else ""
-    url = str(ui_url or cfg.get("danmu_url") or urls.get(platform) or "").strip().strip("'\"")
-    headless = bool(headless_var.get()) if headless_var is not None else bool(cfg.get("danmu_headless", True))
+    url = str(ui_url or cfg.get("danmu_url") or "").strip().strip("'\"")
+    # 平台类型由直播间 URL 域名自动识别（与 danma 采集器内部分流逻辑同源）。
+    platform = _detect_platform(url)
+    # 无窗口(headless)模式抓不到弹幕，必须可见浏览器——写死 False，
+    # 不再读 UI 勾选框与配置项。
+    headless = False
     metrics_only = bool(cfg.get("danmu_metrics_only", False))
     _metrics_only = metrics_only
     return {
@@ -333,7 +332,7 @@ def start_danmu_capture() -> bool:
         _set_capture_ui("配置已关闭", "#fbbf24", False)
         return False
     if not options["url"]:
-        ui.log_screen(f"【弹幕采集】❌ 平台 {options['platform']} 未配置直播间地址。")
+        ui.log_screen("【弹幕采集】❌ 未配置直播间地址，请先填写。")
         _set_capture_ui("未填写直播间", "#ff6b6b", False)
         return False
     if importlib.util.find_spec("playwright") is None:
@@ -356,7 +355,7 @@ def start_danmu_capture() -> bool:
         )
         state.danmu_thread.start()
     _set_capture_ui("启动中", "#22d3ee", True)
-    mode = "无窗口(headless)" if options["headless"] else "可见浏览器"
+    mode = "可见浏览器"   # headless 写死 False：无窗口模式抓不到弹幕
     if options["metrics_only"]:
         mode += "｜仅统计在线/点赞/礼物(不采弹幕)"
     ui.log_screen(f"【弹幕采集】▶ {options['platform']}｜{mode}｜{options['url']}")

@@ -61,7 +61,6 @@ def _enter_main(login_root):
     ui.btn_meet.config(command=live.run_pre_meet)
     ui.btn_live_start.config(command=live.start_live)
     ui.btn_live_stop.config(command=live.stop_live)
-    ui.btn_audio_mode.config(command=live.toggle_audio_mode)
     ui.btn_cap.config(command=capture.start_capture)
     ui.btn_danmu.config(command=danmu.toggle_danmu_capture)
     ui.btn_save.config(command=config.save_config)

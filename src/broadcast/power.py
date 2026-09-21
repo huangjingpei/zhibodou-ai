@@ -89,7 +89,6 @@ def toggle_power():
         ui.lab_sys_status.config(text="系统在线 · 待机", fg=theme.GREEN)
         ui.btn_meet.config(state=tk.NORMAL)
         ui.btn_live_start.config(state=tk.NORMAL)
-        ui.btn_audio_mode.config(state=tk.NORMAL)
         ui.btn_cap.config(state=tk.NORMAL)
         scrcpy_ok = scrcpy_embed.start_scrcpy_embed()
         if scrcpy_ok:
@@ -118,7 +117,6 @@ def toggle_power():
         ui.btn_meet.config(state=tk.DISABLED)
         ui.btn_live_start.config(state=tk.DISABLED)
         ui.btn_live_stop.config(state=tk.DISABLED)
-        ui.btn_audio_mode.config(state=tk.DISABLED)
         ui.btn_cap.config(state=tk.DISABLED)
         ui.txt_danmu.delete(1.0, tk.END)
         ui.txt_screen_log.delete(1.0, tk.END)

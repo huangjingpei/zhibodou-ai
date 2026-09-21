@@ -496,27 +496,11 @@ driver1 = DanmuBrowserCollector
 if __name__ == '__main__':
     import argparse
 
-    def detect_platform(url: str) -> str:
-        low = url.lower()
-        if "douyin.com" in low:
-            return "douyin"
-        if "bilibili.com" in low or "b23.tv" in low:
-            return "bilibili"
-        if "kuaishou.com" in low:
-            return "kuaishou"
-        if "tiktok.com" in low:
-            return "tiktok"
-        if "xiaohongshu.com" in low or "xhslink.com" in low:
-            return "xhs"
-        if "taobao.com" in low:
-            return "tb"
-        if "pinduoduo.com" in low or "yangkeduo.com" in low:
-            return "pdd"
-        if "facebook.com" in low:
-            return "facebook"
-        if "nimo.tv" in low:
-            return "nimo"
-        return "douyin"
+    # 平台识别已抽到独立模块（danmu.py 也会复用，避免 UI 线程拖入 playwright）
+    try:
+        from danma.platform_detect import detect_platform
+    except ImportError:          # 直接以脚本方式运行本文件时的回退
+        from platform_detect import detect_platform
 
     parser = argparse.ArgumentParser(
         description="StreamGet 独立弹幕采集调试脚本 (支持抖音、B站、快手、TikTok、小红书等平台)"

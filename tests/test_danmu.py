@@ -98,13 +98,9 @@ class DanmuBridgeTests(unittest.TestCase):
             state.danmu_queue = old_queue
 
     def test_ui_platform_url_and_headless_override_saved_config(self):
-        with (
-            patch.object(danmu.ui, "cmb_danmu_platform", FakeValue("bili")),
-            patch.object(danmu.ui, "ent_danmu_url", FakeValue("https://live.bilibili.com/123")),
-            patch.object(danmu.ui, "var_danmu_headless", FakeValue(False)),
-        ):
+        with patch.object(danmu.ui, "ent_danmu_url", FakeValue("https://live.bilibili.com/123")):
             options = danmu._read_options()
-        self.assertEqual("bili", options["platform"])
+        self.assertEqual("bilibili", options["platform"])
         self.assertEqual("https://live.bilibili.com/123", options["url"])
         self.assertFalse(options["headless"])
 

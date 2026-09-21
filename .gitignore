@@ -155,3 +155,11 @@ local.properties
 
 # ---- 密钥/运行时凭证(绝不入库) ----
 admin_pwd.dat
+
+# 本机敏感数据：PDK 登录凭据与授权文件，严禁入库
+src/data/license.json
+src/data/pdk_login.json
+data/pdk_login.json
+*.apk
+android_agent/app/release/
+build_debug_log.txt

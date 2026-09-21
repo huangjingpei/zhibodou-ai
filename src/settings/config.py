@@ -13,18 +13,40 @@ pyautogui.PAUSE = 0.05
 # 旧版外部 WebSocket 中转地址已停用；弹幕数据现在通过进程内队列进入客户端。
 WS_SERVER_URL = ""
 
+# 主播语言/方言选项（UI「直播控制与音频活动」行的语言下拉框）。
+# 所选项会作为提示词约束注入每次发给豆包的话术（见 broadcast/live.py）。
+DOUBAO_LANGUAGES = (
+    "普通话",
+    # —— 知名地方方言 ——
+    "粤语（广东话）", "东北话", "四川话", "河南话", "山东话", "陕西话",
+    "上海话", "天津话", "湖南话", "安徽话", "贵州话", "云南话",
+    "闽南语", "客家话", "潮汕话", "海南话",
+    # —— 主流外语 ——
+    "英语", "日语", "韩语", "俄语", "西班牙语", "法语", "德语",
+    "葡萄牙语", "泰语", "越南语", "印尼语", "阿拉伯语",
+)
+
 # 默认配置（界面初次打开 / 配置损坏时的兜底）
 DEFAULT_CFG = {
     "product_name": "日用百货",
     "product_desc": "你就是今天的主播 用中国话直接说话术 不要讲解 日用百货 品类多一一展示 下方小黄车直接拍",
     "pre_meet_text": "你就是今天的主播 用中国话直接说话术 不要讲解 日用百货 品类多一一展示 下方小黄车随便拍",
     # 每次下发给豆包的话术都会自动添加，约束豆包只输出可直接播放的主播口播。
+    # 由原角色约束 + 输出格式硬约束（2026-09-21 用户补充）合并去重整理而来。
     "doubao_host_prompt": (
-        "你现在是一名正在直播带货的主播。不要与用户对话，不要解释，不要提示，"
-        "不要复述任务，不要输出任何无关内容。请直接以主播口吻连续输出可直接播放的直播话术。"
-        "禁止使用“好的”“明白了”“以下是”等开场，禁止添加标题、括号说明、创作说明或结束提示。"
-        "只说主播在直播间会直接说出口的话。"
+        "你现在是一名正在直播带货的主播。不要与用户对话，不要复述任务，"
+        "直接以主播口吻连续输出可直接播放的直播话术，只说主播在直播间会直接说出口的话。\n"
+        "只输出话术正文，不输出任何其他内容。禁止输出：建议、总结、备注、解释、说明、"
+        "下一步动作、注意事项、变体版本、优化方向、使用场景、提醒、问候、结束语。\n"
+        "禁止在话术前添加任何引导语（如“以下是为您生成的话术”“好的”“明白了”），"
+        "禁止在话术后添加任何收尾语（如“希望对您有帮助”“您可以根据需要调整”），"
+        "禁止添加标题、编号、括号说明、分隔线等任何非话术内容。\n"
+        "禁止提问、请求确认或等待补充信息。\n"
+        "话术正文结束后立即停止输出。"
     ),
+    # 主播播报语言/方言（UI 语言下拉框所选值，见 DOUBAO_LANGUAGES），
+    # 会作为语言约束注入每次发给豆包的提示词。
+    "doubao_language": "普通话",
     "r1_min": "0", "r1_max": "30", "cmd1": "留人话术内容填这里",
     "r2_min": "30", "r2_max": "100", "cmd2": "产品讲解话术内容填这里",
     "r3_min": "100", "r3_max": "9999", "cmd3": "逼单促单话术内容填这里",
@@ -34,9 +56,13 @@ DEFAULT_CFG = {
     # 需要登录的创作者后台首次应把 headless 改为 False，扫码/登录成功后再改回 True；
     # 登录状态保存在独立用户目录中，不要提交到版本库。
     "danmu_enabled": True,
+    # 已废弃：平台类型改由 danma/platform_detect.py 按 URL 域名自动识别，
+    # UI 不再有平台下拉框；此键仅为兼容旧 config.json 保留，运行时不再读取。
     "danmu_platform": "douyin",
     "danmu_url": "",
-    "danmu_headless": True,
+    # 已废弃：无窗口(headless)模式抓不到弹幕，必须用可见浏览器。此值已写死
+    # False，不再读配置与 UI；此键仅为兼容旧 config.json 保留。
+    "danmu_headless": False,
     # 仅统计指标模式：true = 打开浏览器只统计 实时在线/累计点赞/礼物互动，
     # 不采集弹幕文本（聊天/进场/关注分享均不下发）；false = 完整弹幕采集。
     "danmu_metrics_only": False,
@@ -116,7 +142,7 @@ def save_config():
                     ent_r1min, ent_r1max, ent_cmd1,
                     ent_r2min, ent_r2max, ent_cmd2,
                     ent_r3min, ent_r3max, ent_cmd3, ent_interval,
-                    cmb_danmu_platform, ent_danmu_url, var_danmu_headless)
+                    ent_danmu_url, cmb_doubao_lang)
     import tkinter.messagebox as messagebox
     try:
         # 在现有配置上更新界面字段。不能重新创建只含界面字段的字典，否则用户手工
@@ -130,9 +156,10 @@ def save_config():
             "r2_min": ent_r2min.get(), "r2_max": ent_r2max.get(), "cmd2": ent_cmd2.get(),
             "r3_min": ent_r3min.get(), "r3_max": ent_r3max.get(), "cmd3": ent_cmd3.get(),
             "script_interval": ent_interval.get(),
-            "danmu_platform": cmb_danmu_platform.get().strip(),
+            # 平台由 danma 按域名识别、headless 已写死 False（无窗口抓不到弹幕），
+            # 两者均不再从 UI 采集。
             "danmu_url": ent_danmu_url.get().strip(),
-            "danmu_headless": bool(var_danmu_headless.get()),
+            "doubao_language": cmb_doubao_lang.get().strip() or "普通话",
         })
         with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
