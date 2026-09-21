@@ -6,6 +6,7 @@ __pycache__/
 # 调试产物 / debug artifacts
 *.png
 *.xml
+!marketing/gemini/images/**
 
 # C extensions
 *.so
