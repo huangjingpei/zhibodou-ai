@@ -109,6 +109,53 @@ class ScriptFilesManagerTests(unittest.TestCase):
         self.assertIn("01", saved_calls)
         self.assertNotIn("01", script_files._tracked_notepads)
 
+    def test_close_all_script_notepads_with_mocked_windows(self):
+        """测试 close_all_script_notepads 针对系统窗口句柄与进程的识别关闭。"""
+        with mock.patch("broadcast.script_files._find_notepad_hwnds", return_value=[(1001, "01.txt - Notepad", 555)]), \
+             mock.patch("broadcast.script_files._find_notepad_pids", return_value={555}), \
+             mock.patch("ctypes.windll.user32.PostMessageW") as mock_post, \
+             mock.patch("psutil.Process") as mock_psutil_proc:
+
+            mock_p_inst = mock.MagicMock()
+            mock_p_inst.is_running.return_value = True
+            mock_psutil_proc.return_value = mock_p_inst
+
+            cnt = script_files.close_all_script_notepads()
+            self.assertGreaterEqual(cnt, 1)
+            mock_post.assert_called_once_with(1001, 0x0010, 0, 0)
+            mock_p_inst.terminate.assert_called_once()
+
+    def test_ui_script_preview_and_labels_refresh(self):
+        """测试 UI 话术预览标签的文本截断与省略号展示。"""
+        import tkinter as tk
+        from gui import ui
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        try:
+            # 创建模拟的 preview label
+            lbl_info = tk.Label(root)
+            lbl_prev = tk.Label(root, width=1)
+            ui.lab_txt1_info = lbl_info
+            ui.lab_txt1_preview = lbl_prev
+
+            # 写入测试内容
+            test_content = "今日特惠全场日用百货品类多一一展示下方小黄车直接拍全场包邮到家"
+            script_files.write_script_content("01", test_content)
+
+            ui.refresh_script_labels()
+
+            # 验证预览文本以省略号结尾
+            preview_text = lbl_prev.cget("text")
+            self.assertTrue(preview_text.endswith("..."), f"预览必须以省略号结尾，当前: {preview_text}")
+            self.assertIn("今日特惠", preview_text)
+            self.assertEqual(lbl_info.cget("text"), f"({len(test_content)}字)")
+        finally:
+            root.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

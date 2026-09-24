@@ -13,15 +13,16 @@
   "r3_min": "100",
   "r3_max": "9999",
   "cmd3": "逼单促单话术内容填这里，要求500字",
-  "ai_danmu_reply_enabled": false,
+  "danmu_enabled": true,
+  "ai_danmu_reply_enabled": true,
   "deepseek_api_key": "",
   "deepseek_api_base": "https://api.deepseek.com",
   "deepseek_model": "deepseek-chat",
-  "danmu_enabled": true,
   "danmu_platform": "douyin",
   "danmu_url": "https://live.douyin.com/646454278948",
   "danmu_headless": true,
   "danmu_metrics_only": true,
+  "danmu_mode": "【预留】Playwright 公屏文本回复 (低显存/无独显)",
   "danmu_user_data_dir": "",
   "danmu_chrome_path": "",
   "danmu_urls": {
@@ -44,5 +45,7 @@
   "vad_end_hysteresis_db": 3.0,
   "vad_calibration_sec": 0.8,
   "vad_calibration_wait_sec": 6.0,
-  "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)"
+  "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)",
+  "audio_duck_ratio": 0.25,
+  "obs_audio_port": 8554
 }

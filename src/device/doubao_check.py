@@ -43,9 +43,16 @@ def check_doubao_ready():
     # 1. 检查豆包安装状态
     installed = adb_utils.is_app_installed(DOUBAO_PKG)
     if installed is False:
-        return False, ["❌ 手机未安装豆包 APP"], "auto"
+        return False, ["❌ 手机未安装豆包 APP，请前往手机应用商店搜索并安装「豆包」！"], "auto"
 
-    # 2. 检查前台状态
+    # 2. 检查前台状态，若未在前台则尝试自动打开
+    if not adb_utils.doubao_in_foreground():
+        try:
+            from device import agent_setup
+            agent_setup.check_and_open_doubao()
+        except Exception:
+            pass
+
     if not adb_utils.doubao_in_foreground():
         return False, ["⚠️ 豆包未在前台运行，请在手机上打开豆包"], "auto"
 

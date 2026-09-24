@@ -46,7 +46,7 @@ def _enter_main(login_root):
         pass
 
     # ----- 业务模块（延后导入；任一缺失不影响登录界面） -----
-    from gui import ui, dialogs
+    from gui import ui, dialogs, settings_dialog
     from core import state
     from settings import config
     from broadcast import power, live
@@ -66,6 +66,8 @@ def _enter_main(login_root):
     ui.btn_save.config(command=config.save_config)
     ui.btn_pwd.config(command=dialogs.dialog_pdk_profile)
     ui.btn_auth.config(command=dialogs.dialog_pdk_license)
+    if getattr(ui, "btn_settings", None):
+        ui.btn_settings.config(command=lambda: settings_dialog.open_settings_dialog(ui.root))
     ui.btn_logout.config(command=lambda: _do_logout(exit_on_close=False))
 
     # 关闭主窗口 = 退出登录回到登录界面（与原版直接关闭程序行为对齐，

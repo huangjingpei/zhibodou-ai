@@ -7,130 +7,117 @@ from live_plate.Message import CreatMemberMessage, CreatSocialMessage, CreatLike
     CreatGiftMessage, CreatRoomMessage
 
 
-def douyin_pb(data: bytes):
+def _extract_user(res: dict):
+    user = res.get('user') or {}
+    name = user.get('nickname') or '游客'
+    head_img = ''
+    avatar = user.get('avatarThumb') or {}
+    urls = avatar.get('urlList') or []
+    if urls:
+        head_img = urls[0]
+    return name, head_img
 
-    o = douyin_message_pb2.PushFrame()
-    o.ParseFromString(data)
-    payload = o.palyload
-    for t in o.headersList:
-        if t.key == 'compress_type' and t.value == "gzip":
-            payload = gzip.decompress(o.palyload)
-            break
-    return douyin_pb2(payload)
+
+def douyin_pb(data: bytes):
+    if not data or isinstance(data, str) or len(data) < 5:
+        return []
+    try:
+        o = douyin_message_pb2.PushFrame()
+        o.ParseFromString(data)
+        payload = o.palyload
+        for t in o.headersList:
+            if t.key == 'compress_type' and t.value == "gzip":
+                payload = gzip.decompress(o.palyload)
+                break
+        return douyin_pb2(payload)
+    except Exception:
+        return []
 
 
 def douyin_pb2(data: bytes):
-    if len(data) < 30:
+    if not data or len(data) < 30:
         return []
-    r = douyin_message_pb2.Response()
-    r.ParseFromString(data)
-    e = r
+    try:
+        r = douyin_message_pb2.Response()
+        r.ParseFromString(data)
+    except Exception:
+        return []
 
     listmessage = []
-    messagelist = e.messages
+    messagelist = r.messages
     for t in messagelist:
-        o = t.payload
-        if t.method == "WebcastGiftMessage":
-            message_ = douyin_message_pb2.GiftMessage()
-            message_.ParseFromString(o)
-            content = message_.common.describe
-            res = MessageToDict(message_, preserving_proto_field_name=True)
-            name = res['user']['nickname']
-            head_img = res['user']['avatarThumb']['urlList'][0]
-            giftname = content.split('个')[-1]
-            repeatEnd = 0
-            gift_Id = ''
-            gift_Count = ''
-            gift_name = ''
-            if 'repeatEnd' in res:
-                gift_Id = res['giftId']
-                gift_Count = res['repeatCount']
-                gift_name = giftname
-                repeatEnd = 1
-            else:
-                if 'gift' in res:
-                    if str(res['gift']['type']) == '2':
-                        gift_Id = res['giftId']
-                        gift_Count = res['repeatCount']
-                        gift_name = giftname
-                        repeatEnd = 1
+        try:
+            o = t.payload
+            if t.method == "WebcastGiftMessage":
+                message_ = douyin_message_pb2.GiftMessage()
+                message_.ParseFromString(o)
+                content = getattr(getattr(message_, 'common', None), 'describe', '') or ''
+                res = MessageToDict(message_, preserving_proto_field_name=True)
+                name, head_img = _extract_user(res)
+                giftname = content.split('个')[-1] if '个' in content else (content or '礼物')
+                repeatEnd = 0
+                gift_Id = ''
+                gift_Count = ''
+                gift_name = ''
+                if 'repeatEnd' in res:
+                    gift_Id = res.get('giftId', '')
+                    gift_Count = res.get('repeatCount', 1)
+                    gift_name = giftname
+                    repeatEnd = 1
+                else:
+                    if 'gift' in res:
+                        g_type = str(res['gift'].get('type', ''))
+                        if g_type == '2':
+                            gift_Id = res.get('giftId', '')
+                            gift_Count = res.get('repeatCount', 1)
+                            gift_name = giftname
+                            repeatEnd = 1
+                        elif g_type in ('4', '13'):
+                            gift_Id = res['gift'].get('id', '')
+                            gift_Count = 1
+                            gift_name = giftname
+                            repeatEnd = 1
 
-                    if str(res['gift']['type']) == '4':
-                        gift_Id = res['gift']['id']
-                        gift_Count = 1
-                        gift_name = giftname
-                        repeatEnd = 1
-                    if str(res['gift']['type']) == '13':
-                        gift_Id = res['gift']['id']
-                        gift_Count = 1
-                        gift_name = giftname
-                        repeatEnd = 1
+                if repeatEnd == 1:
+                    listmessage.append(CreatGiftMessage(name=name, head_image=head_img, gift_name=gift_name, gift_count=gift_Count))
 
-            if repeatEnd == 1:
-                listmessage.append(CreatGiftMessage(name=name,head_image=head_img, gift_name=gift_name, gift_count=gift_Count))
+            elif t.method == "WebcastChatMessage":
+                message_ = douyin_message_pb2.ChatMessage()
+                message_.ParseFromString(o)
+                res = MessageToDict(message_, preserving_proto_field_name=True)
+                name, head_img = _extract_user(res)
+                content = message_.content
+                listmessage.append(CreatChatMessage(name=name, head_image=head_img, content=content))
 
+            elif t.method == "WebcastSocialMessage":
+                message_ = douyin_message_pb2.SocialMessage()
+                message_.ParseFromString(o)
+                res = MessageToDict(message_, preserving_proto_field_name=True)
+                name, head_img = _extract_user(res)
+                listmessage.append(CreatSocialMessage(name=name, head_image=head_img))
 
+            elif t.method == "WebcastLikeMessage":
+                message_ = douyin_message_pb2.LikeMessage()
+                message_.ParseFromString(o)
+                res = MessageToDict(message_, preserving_proto_field_name=True)
+                name, head_img = _extract_user(res)
+                listmessage.append(CreatLikeMessage(name=name, head_image=head_img, count=res.get('count', 1)))
 
+            elif t.method == "WebcastMemberMessage":
+                message_ = douyin_message_pb2.MemberMessage()
+                message_.ParseFromString(o)
+                res = MessageToDict(message_, preserving_proto_field_name=True)
+                name, head_img = _extract_user(res)
+                listmessage.append(CreatMemberMessage(name=name, head_image=head_img))
 
-        elif t.method == "WebcastChatMessage":
+            elif t.method == "WebcastRoomUserSeqMessage":
+                message_ = douyin_message_pb2.RoomUserSeqMessage()
+                message_.ParseFromString(o)
+                res = MessageToDict(message_, preserving_proto_field_name=True)
+                listmessage.append(CreatRoomMessage(count=res.get('total', 0)))
 
-            message_ = douyin_message_pb2.ChatMessage()
-            message_.ParseFromString(o)
-            res = MessageToDict(message_, preserving_proto_field_name=True)
-            name = res['user']['nickname']
-            head_img = res['user']['avatarThumb']['urlList'][0]
-            content = message_.content
-            listmessage.append(CreatChatMessage(name=name,head_image=head_img, content=content))
-
-
-        elif t.method == "WebcastSocialMessage":
-            message_ = douyin_message_pb2.SocialMessage()
-            message_.ParseFromString(o)
-            res = MessageToDict(message_, preserving_proto_field_name=True)
-            name = res['user']['nickname']
-
-            head_img = res['user']['avatarThumb']['urlList'][0]
-
-            listmessage.append(CreatSocialMessage(name=name,head_image=head_img))
-        elif t.method == "WebcastLikeMessage":
-            message_ = douyin_message_pb2.LikeMessage()
-            message_.ParseFromString(o)
-            res = MessageToDict(message_, preserving_proto_field_name=True)
-            name = res['user']['nickname']
-
-            head_img = res['user']['avatarThumb']['urlList'][0]
-
-
-
-            # MessageToDict 会省略 proto3 默认值字段：count 缺失时直接取键会
-            # KeyError 并炸掉整批消息（含在线人数），故用 .get 兜底。
-            listmessage.append(CreatLikeMessage(name=name,head_image=head_img,count=res.get('count', 1)))
-
-        elif t.method == "WebcastMemberMessage":
-
-            message_ = douyin_message_pb2.MemberMessage()
-            message_.ParseFromString(o)
-            res = MessageToDict(message_, preserving_proto_field_name=True)
-            content = '进入直播间'
-            name = res['user']['nickname']
-            head_img = res['user']['avatarThumb']['urlList'][0]
-
-
-            listmessage.append(CreatMemberMessage(name=name,head_image=head_img))
-
-
-
-
-
-
-        elif t.method == "WebcastRoomUserSeqMessage":
-            message_ = douyin_message_pb2.RoomUserSeqMessage()
-            message_.ParseFromString(o)
-            res = MessageToDict(message_, preserving_proto_field_name=True)
-
-            # MessageToDict 会省略 proto3 默认值字段：total==0 时键不存在，
-            # 直接 res['total'] 会 KeyError 并炸掉整批消息，故用 .get 兜底。
-            listmessage.append(CreatRoomMessage(count=res.get('total', 0)))
+        except Exception:
+            continue
 
     return listmessage
 

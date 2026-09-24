@@ -17,14 +17,26 @@ from audio.vad import AudioPlaybackMonitor
 
 
 def power_on_self_check():
-    """开机自检：豆包已安装/就绪(前台+对话界面+无遮挡+可发送) / ADBKeyboard。
+    """开机自检：智博豆助手无障碍激活 / 豆包安装与前台就绪 / ADBKeyboard。
     返回问题列表（空=全部通过）。离线(无 adb)时只给手动模式提示，不阻断开机。"""
     problems = []
-    # 豆包整体体检（含设备在线 / 是否已装 / 前台 / 对话界面 / 无遮挡 / 可发送）
+
+    # 1. 运行前双重自检：智博豆助手无障碍自动激活 + 豆包安装检测与自动打开
+    try:
+        from device import agent_setup
+        _setup_ok, setup_problems = agent_setup.run_prerun_inspections(log_fn=ui.log_screen, interactive=True)
+        problems.extend(setup_problems)
+    except Exception as e:
+        problems.append(f"⚠️ 运行前设备自检异常: {e}")
+
+    # 2. 豆包整体体检（含设备在线 / 是否已装 / 前台 / 对话界面 / 无遮挡 / 可发送）
     _ok, dp, mode = doubao_check.check_doubao_ready()
-    problems.extend(dp)
-    # ADBKeyboard 输入法：豆包文本直输主通道（Android 10+ 剪贴板方案已失效）
-    if mode == "online":
+    for p in dp:
+        if p not in problems:
+            problems.append(p)
+
+    # 3. ADBKeyboard 输入法：豆包文本直输主通道（Android 10+ 剪贴板方案已失效）
+    if mode == "online" or mode == "auto":
         if not input_text.check_adbkeyboard_installed():
             problems.append("⚠️ 手机未安装 ADBKeyboard：话术将无法输入豆包！\n"
                             "   （Android 10+ 禁止后台写剪贴板，clipper 方案已失效。\n"

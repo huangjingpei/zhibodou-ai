@@ -19,6 +19,8 @@ import time
 import uuid
 from typing import Dict, Optional, Set
 
+from settings import config
+
 logger = logging.getLogger(__name__)
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -307,9 +309,20 @@ _global_bridge: Optional[OBSAudioBridge] = None
 _bridge_lock = threading.Lock()
 
 
-def get_obs_bridge(port: int = 8554) -> OBSAudioBridge:
+def get_obs_bridge(port: Optional[int] = None) -> OBSAudioBridge:
     global _global_bridge
     with _bridge_lock:
+        if port is None:
+            try:
+                port = int(config.load_config().get("obs_audio_port", 8554))
+            except (ValueError, TypeError):
+                port = 8554
+        if _global_bridge is not None and _global_bridge.port != port:
+            try:
+                _global_bridge.stop()
+            except Exception:
+                pass
+            _global_bridge = None
         if _global_bridge is None:
             _global_bridge = OBSAudioBridge(port=port)
         return _global_bridge

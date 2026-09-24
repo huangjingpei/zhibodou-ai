@@ -129,9 +129,10 @@ def build_doubao_host_prompt(content: str, is_pre_meet: bool = False) -> str:
 
 def _read_vad_config():
     cfg = config.load_config()
+    default_wait_start = float(config.DEFAULT_CFG.get("vad_wait_start_sec", 15.0))
     return {
         "silence_hold": max(1.5, float(cfg.get("vad_silence_hold_sec", 4.0) or 4.0)),
-        "wait_start": max(10.0, float(cfg.get("vad_wait_start_sec", 25.0) or 25.0)),
+        "wait_start": max(5.0, float(cfg.get("vad_wait_start_sec", default_wait_start) or default_wait_start)),
         "speak_confirm": max(0.1, float(cfg.get("vad_speak_confirm_sec", 0.3) or 0.3)),
         "energy_threshold": float(cfg.get("vad_energy_threshold_db", -42.0) or -42.0),
         "noise_margin": max(3.0, float(cfg.get("vad_noise_margin_db", 6.0) or 6.0)),
@@ -330,6 +331,15 @@ def run_pre_meet():
         messagebox.showwarning("提示", "开播预演文本框不能为空，请输入要预演的话术！")
         return
 
+    # 预演前确保手机停留在豆包对话界面
+    try:
+        from device import adb_utils, agent_setup
+        if not adb_utils.doubao_in_foreground():
+            ui.log_screen("【预演前置检查】豆包未在前台，正在唤醒并打开豆包...")
+            agent_setup.check_and_open_doubao(log_fn=ui.log_screen)
+    except Exception:
+        pass
+
     ui.set_status("状态：⏳正在向豆包下发预演话术...", "#00e5ff")
     ui.log_screen(f"【开播预演】正在下发（已融合商品名称、价格与物流背景）: {content[:30]}...")
 
@@ -360,7 +370,7 @@ def send_script_content(text: str, range_label: str = "", is_first_round: bool =
         ui.log_screen("【VAD】⚠ VAD 配置读取异常，采用默认值：%s" % exc)
         vad_cfg = {
             "silence_hold": 4.0,
-            "wait_start": 25.0,
+            "wait_start": float(config.DEFAULT_CFG.get("vad_wait_start_sec", 15.0)),
             "speak_confirm": 0.3,
             "energy_threshold": -42.0,
             "noise_margin": 6.0,
@@ -438,7 +448,7 @@ def wait_next_round_worker(audio_monitor, generation, stop_event, vad_cfg):
     )
     try:
         result = audio_monitor.wait_for_doubao_speech_cycle(
-            max_wait_start_sec=max(25.0, vad_cfg["wait_start"]),
+            max_wait_start_sec=max(5.0, vad_cfg["wait_start"]),
             stop_event=stop_event,
         )
     except Exception as exc:
@@ -507,6 +517,15 @@ def start_live():
     try:
         from broadcast.script_files import close_all_script_notepads
         close_all_script_notepads(log_fn=ui.log_screen)
+    except Exception:
+        pass
+
+    # 开播前确保手机停留在豆包对话界面
+    try:
+        from device import adb_utils, agent_setup
+        if not adb_utils.doubao_in_foreground():
+            ui.log_screen("【开播前置检查】豆包未在前台，正在唤醒并打开豆包...")
+            agent_setup.check_and_open_doubao(log_fn=ui.log_screen)
     except Exception:
         pass
 

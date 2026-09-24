@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import random
 import shutil
 import subprocess
@@ -28,44 +29,6 @@ from live_plate.pdd.pdd import pdd_pb,Pdd
 from live_plate.vx.vx import ParseVxMessage
 from live_plate.xhs.xhs import Xhs
 from live_plate.tb.tb import Tb
-
-class DanmuBrowserCollector:
-    def __init__(
-        self,
-        platform="douyin",
-        url="",
-        headless=True,
-        user_data_dir=None,
-        chrome_path=None,
-        message_callback=None,
-        log_fn=print,
-        online_only=False,
-    ):
-        super().__init__()
-        self.platform = str(platform or "douyin").strip().lower()
-        self.url = str(url or "").strip().strip("'\"")
-        self.headless = bool(headless)
-        self.user_data_dir = user_data_dir
-        self.chrome_path = chrome_path
-        self.message_callback = message_callback
-        self.log_fn = log_fn
-        # 仅统计指标模式（打开浏览器但不采弹幕文本）：浏览器照常打开并保持
-        # WS/HTTP 监听，在 PostMessage 统一出口处丢弃弹幕文本类消息
-        # （Chat/Member/Social），只放行三个统计指标：
-        # RoomMessage(实时在线) / LikeMessage(累计点赞) / GiftMessage(礼物互动)
-        # 以及 SystemMessage/CollectorStatus（状态流转必需）。
-        self.online_only = bool(online_only)
-        self._stop_event = threading.Event()
-        self.browser = None
-        self.page = None
-        self.lock = threading.RLock()
-        self.vx_gift_count = {}
-        self.vx_person = {}
-        self.vx_person_url = {}
-        self.ParseTbMessage = Tb().ParseTbComment
-        self.ParsePddMessage = Pdd().pdd_pb
-        self.ParseXhsMessage = Xhs().ParseXhsComment
-        self.ParseXhsShopMessage = Xhs().ParseXhsShopComment
 
 def cleanup_browser_profile(user_data_dir: str):
     """清理残留的占用该用户数据目录的 Chrome 进程及锁文件，防止 exitCode=21 导致崩溃。"""
@@ -96,6 +59,55 @@ def cleanup_browser_profile(user_data_dir: str):
                     pass
 
 
+def should_abort_media_request(url: str, resource_type: str) -> bool:
+    """判断当前请求是否属于视频/音频流切片，若是则应丢弃以降低 CPU 和带宽占用。"""
+    if str(resource_type or "").lower() == "media":
+        return True
+    low_url = str(url or "").lower()
+    return any(ext in low_url for ext in (".flv", ".m3u8", ".m4s", ".ts"))
+
+
+class DanmuBrowserCollector:
+    def __init__(
+        self,
+        platform="douyin",
+        url="",
+        headless=True,
+        user_data_dir=None,
+        chrome_path=None,
+        message_callback=None,
+        log_fn=print,
+        online_only=False,
+    ):
+        super().__init__()
+        self.platform = str(platform or "douyin").strip().lower()
+        self.url = str(url or "").strip().strip("'\"")
+        self.headless = bool(headless)
+        self.user_data_dir = user_data_dir
+        self.chrome_path = chrome_path
+        self.message_callback = message_callback
+        self.log_fn = log_fn
+        # 仅统计指标模式（打开浏览器但不采弹幕文本）：浏览器照常打开并保持
+        # WS/HTTP 监听，在 PostMessage 统一出口处丢弃弹幕文本类消息
+        # （Chat/Member/Social），只放行三个统计指标：
+        # RoomMessage(实时在线) / LikeMessage(累计点赞) / GiftMessage(礼物互动)
+        # 以及 SystemMessage/CollectorStatus（状态流转必需）。
+        self.online_only = bool(online_only)
+        self._stop_event = threading.Event()
+        self._owner_thread_id = None
+        self._action_queue = queue.Queue()
+        self.browser = None
+        self.page = None
+        self.lock = threading.RLock()
+        self.vx_gift_count = {}
+        self.vx_person = {}
+        self.vx_person_url = {}
+        self.ParseTbMessage = Tb().ParseTbComment
+        self.ParsePddMessage = Pdd().pdd_pb
+        self.ParseXhsMessage = Xhs().ParseXhsComment
+        self.ParseXhsShopMessage = Xhs().ParseXhsShopComment
+
+
     def getUserData(self):
         if self.user_data_dir:
             return os.path.abspath(os.path.expandvars(self.user_data_dir))
@@ -114,6 +126,7 @@ def cleanup_browser_profile(user_data_dir: str):
             self.PostMessage([CreatSystemMessage("未配置直播间地址")])
             return
         self._stop_event.clear()
+        self._owner_thread_id = threading.get_ident()
         result = checkChrome(self.chrome_path).check()
         self.PostMessage([CreatSystemMessage(result['tips'])])
         if not result['status']:
@@ -152,29 +165,6 @@ def cleanup_browser_profile(user_data_dir: str):
                 pages = self.browser.pages
                 self.page = pages[0] if pages else self.browser.new_page()
 
-                # 拦截媒体流与重型静态资源，避免无头浏览器解码 4K/1080P 视频导致 CPU 飙升与带宽浪费
-                def block_heavy_resources(route):
-                    try:
-                        req = route.request
-                        res_type = req.resource_type
-                        low_url = req.url.lower()
-                        if res_type in ("image", "media", "font"):
-                            route.abort()
-                            return
-                        if any(ext in low_url for ext in (
-                            ".flv", ".m3u8", ".ts", ".mp4", ".m4s", ".webm",
-                            ".aac", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".otf"
-                        )):
-                            route.abort()
-                            return
-                        route.continue_()
-                    except Exception:
-                        try:
-                            route.continue_()
-                        except Exception:
-                            pass
-
-                self.page.route("**/*", block_heavy_resources)
                 self.page.on("websocket", self.wss)
                 self.page.on("response", self.http)
                 self.page.on("load", self.execute_js)
@@ -185,11 +175,59 @@ def cleanup_browser_profile(user_data_dir: str):
                     + f"：{self.page.url}"
                 )])
                 last_refresh = time.monotonic()
+                auto_login_done = False
+                auto_login_start = time.monotonic()
+                auto_login_retries = 0
+
                 while not self._stop_event.is_set():
-                    self.page.wait_for_timeout(500)
+                    self.page.wait_for_timeout(200)
+
+                    # 处理跨线程派发的操作（确保 Playwright 所有调用均在同一工作线程）
+                    while not self._action_queue.empty():
+                        try:
+                            fn, res_q = self._action_queue.get_nowait()
+                            try:
+                                res = fn()
+                            except Exception as e:
+                                res = {"success": False, "message": str(e)}
+                            if res_q is not None:
+                                res_q.put(res)
+                        except queue.Empty:
+                            break
+
                     if time.monotonic() - last_refresh >= 30 * 60:
                         self.page.reload(timeout=60000, wait_until="domcontentloaded")
                         last_refresh = time.monotonic()
+                        auto_login_done = False
+                        auto_login_start = time.monotonic()
+                        auto_login_retries = 0
+
+                    # 自动探测并调起扫码登录弹窗（开播后 1.5~15 秒内自动尝试）
+                    if not auto_login_done and (time.monotonic() - auto_login_start >= 1.5):
+                        try:
+                            if self._is_login_modal_open_impl():
+                                auto_login_done = True
+                                self.log_fn("【弹幕助手】已为您自动弹出扫码登录窗口，请使用手机 APP 扫码登录！")
+                            else:
+                                status = self._check_login_status_impl()
+                                if status.get("logged_in"):
+                                    auto_login_done = True
+                                    self.log_fn("【弹幕助手】检测到当前账号已处于登录状态，无需重复登录。")
+                                else:
+                                    res = self._trigger_login_impl()
+                                    auto_login_retries += 1
+                                    if res.get("success") and not res.get("already_logged_in"):
+                                        self.page.wait_for_timeout(600)
+                                        if self._is_login_modal_open_impl():
+                                            auto_login_done = True
+                                            self.log_fn("【弹幕助手】已为您自动点击并打开扫码登录弹窗，请使用手机 APP 扫码！")
+                                    if auto_login_retries >= 8:
+                                        auto_login_done = True
+                                        self.log_fn("【弹幕助手】提示：若未看到登录弹窗，请直接在打开的浏览器窗口右上角点击【登录】")
+                        except Exception as e:
+                            auto_login_retries += 1
+                            if auto_login_retries >= 8:
+                                auto_login_done = True
 
         except Exception as error:
             if 'playwright install chrome' in str(error):
@@ -197,6 +235,14 @@ def cleanup_browser_profile(user_data_dir: str):
             else:
                 self.PostMessage([CreatSystemMessage(content=f'采集器异常：{error}')])
         finally:
+            # 清理剩余跨线程请求
+            while not self._action_queue.empty():
+                try:
+                    _, res_q = self._action_queue.get_nowait()
+                    if res_q is not None:
+                        res_q.put({"success": False, "message": "采集器已关闭"})
+                except queue.Empty:
+                    break
             try:
                 if self.browser:
                     self.browser.close()
@@ -204,8 +250,10 @@ def cleanup_browser_profile(user_data_dir: str):
                 pass
             self.browser = None
             self.page = None
+            self._owner_thread_id = None
+
     def execute_js(self, _event=None):
-        """页面保活：移除遮罩、自动点播放/继续播放。
+        """页面保活与静音降载：保持页面活跃，检测弹窗，适度静音与暂停音视频以节省 CPU。
 
         注意：本函数挂在 page.on("load") 回调上，任何异常都会打崩 Playwright
         的同步事件循环（greenlet 损坏后 WS 帧回调全部失联，表现为采集器
@@ -214,59 +262,449 @@ def cleanup_browser_profile(user_data_dir: str):
         if self._stop_event.is_set() or self.page is None:
             return
         try:
-            self.page.evaluate("document.title = '请勿关闭';")
+            self.page.evaluate("document.title = '智播豆 · 弹幕采集中（请勿关闭）';")
         except Exception as error:
             self.log_fn(f"设置页面标题失败: {error}")
-        if 'douyin' in (self.page.url or ''):
-            try:
-                self.page.evaluate("""
-                    (() => {
-                        setInterval(() => {
-                            try {
-                                document.querySelectorAll('.__hasOptionBar').forEach((e) => e.remove());
-                            } catch (err) {}
-                        }, 5000);
 
-                        // 自动点击播放按钮（autoplay 被拦时的兜底）
-                        setInterval(() => {
-                            try {
-                                const playButton = document.querySelector('.JL05k7eS.OG51D9OO');
-                                if (playButton) {
-                                    playButton.dispatchEvent(new MouseEvent('click', {
-                                        view: window, bubbles: true, cancelable: true,
-                                    }));
+        try:
+            self.page.evaluate("""
+                (() => {
+                    // 1. 自动点击"继续播放"确认弹窗，防止长时间未交互导致直播间断开
+                    setInterval(() => {
+                        try {
+                            const all = document.getElementsByTagName('*');
+                            for (let i = 0; i < all.length; i++) {
+                                if (all[i].textContent && all[i].textContent.trim() === '继续播放') {
+                                    all[i].click();
+                                    break;
                                 }
-                            } catch (err) {}
-                        }, 5000);
+                            }
+                        } catch (err) {}
+                    }, 5000);
 
-                        // 自动点击"继续播放"弹窗
-                        setInterval(() => {
-                            try {
-                                const all = document.getElementsByTagName('*');
-                                for (let i = 0; i < all.length; i++) {
-                                    if (all[i].textContent && all[i].textContent.trim() === '继续播放') {
-                                        all[i].click();
-                                        break;
-                                    }
+                    // 2. 定时静音与暂停音视频播放，降低 CPU 解码占用，且不破坏页面 DOM
+                    setInterval(() => {
+                        try {
+                            document.querySelectorAll('video, audio').forEach(el => {
+                                el.muted = true;
+                                el.volume = 0;
+                                if (!el.paused) {
+                                    el.pause();
                                 }
-                            } catch (err) {}
-                        }, 5000);
-                    })()
-                """)
-            except Exception as error:
-                # 注入失败绝不能向外抛，否则事件循环被破坏、WS 帧全部收不到。
-                self.log_fn(f"注入保活 JS 失败: {error}")
+                            });
+                        } catch (err) {}
+                    }, 3000);
+                })()
+            """)
+        except Exception as error:
+            # 注入失败绝不能向外抛，否则事件循环被破坏、WS 帧全部收不到。
+            self.log_fn(f"注入保活与静音 JS 失败: {error}")
+
+    def _dispatch_to_owner_thread(self, fn, timeout=5.0):
+        """将 Playwright 操作派发到创建它的工作线程执行，避免 greenlet 跨线程切换错误。"""
+        if self._owner_thread_id is None or threading.get_ident() == self._owner_thread_id:
+            return fn()
+        if self._stop_event.is_set() or self.page is None:
+            return {"success": False, "message": "采集器未运行或已停止"}
+        res_queue = queue.Queue(maxsize=1)
+        try:
+            self._action_queue.put((fn, res_queue), timeout=1.0)
+            return res_queue.get(timeout=timeout)
+        except (queue.Full, queue.Empty):
+            return {"success": False, "message": "操作超时或采集器繁忙"}
 
     def browser_close(self):
-        """
-        关闭浏览器与监听
+        """关闭浏览器与监听。
+
+        注意：Playwright 对象（包括 browser.close）只能由创建它的同一个线程调用，
+        绝不能在 Tkinter UI 主线程等外部线程跨线程调用，否则会触发
+        greenlet.error: Cannot switch to a different thread 崩溃。
+        外部线程只需调用 self._stop_event.set()，采集工作线程会在退出循环时
+        在其自身线程的安全上下文中执行 finally -> browser.close()。
         """
         self._stop_event.set()
+        if self._owner_thread_id is not None and threading.get_ident() == self._owner_thread_id:
+            try:
+                if self.browser is not None:
+                    self.browser.close()
+            except Exception:
+                pass
+            self.browser = None
+            self.page = None
+
+    def is_login_modal_open(self) -> bool:
+        """检查页面上是否已经弹出了登录弹窗或二维码弹窗。"""
+        res = self._dispatch_to_owner_thread(self._is_login_modal_open_impl, timeout=2.0)
+        return bool(res) if isinstance(res, bool) else False
+
+    def _is_login_modal_open_impl(self) -> bool:
+        """检查页面上是否已经弹出了登录弹窗或二维码弹窗（属主线程内部执行）。"""
+        if self._stop_event.is_set() or self.page is None:
+            return False
         try:
-            if self.browser is not None:
-                self.browser.close()
+            return bool(self.page.evaluate("""
+                (() => {
+                    const modalSelectors = [
+                        '[class*="login-guide"]',
+                        '[class*="login-mask"]',
+                        '[class*="login-modal"]',
+                        '[class*="passport-login"]',
+                        '[class*="passport"]',
+                        '[class*="qrcode"]',
+                        'iframe[src*="passport"]',
+                        '[class*="dialog-mask"]',
+                        '[class*="modal-mask"]',
+                    ];
+                    for (const s of modalSelectors) {
+                        const el = document.querySelector(s);
+                        if (el && (el.offsetParent !== null || el.getClientRects().length > 0)) {
+                            return true;
+                        }
+                    }
+                    const texts = ['扫码登录', '抖音扫一扫', '快捷登录', '验证码登录', '手机号登录'];
+                    for (const t of texts) {
+                        const found = Array.from(document.querySelectorAll('div, span, p, h2, h3, a, button')).some(
+                            e => (e.innerText || e.textContent || '').trim().includes(t) && (e.offsetParent !== null || e.getClientRects().length > 0)
+                        );
+                        if (found) return true;
+                    }
+                    return false;
+                })()
+            """))
         except Exception:
-            pass
+            return False
+
+    def check_login_status(self) -> dict:
+        """检查当前浏览器是否已登录平台账号（以抖音为主，同时支持通用平台探测）。
+
+        返回字典：{"logged_in": bool, "user_name": str, "message": str}
+        """
+        res = self._dispatch_to_owner_thread(self._check_login_status_impl, timeout=3.0)
+        if isinstance(res, dict):
+            if "logged_in" not in res:
+                res["logged_in"] = False
+            return res
+        return {"logged_in": False, "user_name": "", "message": str(res)}
+
+    def _check_login_status_impl(self) -> dict:
+        """检查当前浏览器是否已登录平台账号（属主线程内部执行）。
+
+        返回字典：{"logged_in": bool, "user_name": str, "message": str}
+        """
+        if self._stop_event.is_set() or self.page is None:
+            return {"logged_in": False, "user_name": "", "message": "浏览器未启动或页面未加载"}
+
+        try:
+            # 1. 优先尝试从 Cookie 验证关键认证凭据（抖音：sessionid / passport_csrf_token / uid_tt）
+            if self.browser:
+                try:
+                    contexts = getattr(self.browser, "contexts", None)
+                    ctx = contexts[0] if contexts else getattr(self.page, "context", None)
+                    if ctx:
+                        cookies = ctx.cookies()
+                        login_cookie_names = {"sessionid", "sessionid_ss", "passport_csrf_token", "LOGIN_STATUS", "uid_tt"}
+                        found = [c["name"] for c in cookies if c.get("name") in login_cookie_names and c.get("value")]
+                        if any(name in ("sessionid", "sessionid_ss", "uid_tt") for name in found):
+                            return {
+                                "logged_in": True,
+                                "user_name": "",
+                                "message": f"Cookie 认证有效（已登录，检测到凭据: {', '.join(found)}）",
+                            }
+                except Exception:
+                    pass
+
+            # 2. 页面 DOM 检测
+            res = self.page.evaluate("""
+                (() => {
+                    // 查找已登录用户头像或用户信息节点
+                    const avatar = document.querySelector(
+                        'header img[class*="avatar"], [class*="header"] [class*="avatar"], [data-e2e="user-info"], [class*="userAvatar"], [class*="avatar-box"]'
+                    );
+
+                    // 查找可见的登录按钮
+                    const loginKeywords = ['登录', '登录后发弹幕', '立即登录', '扫码登录'];
+                    const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"], span'));
+                    const loginBtn = candidates.find(el => {
+                        const t = (el.innerText || el.textContent || '').trim();
+                        return loginKeywords.includes(t) && (el.offsetParent !== null || el.getClientRects().length > 0);
+                    });
+
+                    // 检查输入框占位符
+                    const inputs = Array.from(document.querySelectorAll('textarea, input[placeholder], div[contenteditable="true"]'));
+                    let hasLoginPrompt = false;
+                    for (const inp of inputs) {
+                        const ph = (inp.getAttribute('placeholder') || inp.innerText || '').trim();
+                        if (ph.includes('登录后') || ph.includes('登录即可') || ph.includes('需登录')) {
+                            hasLoginPrompt = true;
+                            break;
+                        }
+                    }
+
+                    if (loginBtn) {
+                        return {
+                            logged_in: false,
+                            user_name: '',
+                            message: `页面显示登录入口【${(loginBtn.innerText || '').trim()}】，尚未登录`,
+                        };
+                    }
+
+                    if (hasLoginPrompt) {
+                        return {
+                            logged_in: false,
+                            user_name: '',
+                            message: '弹幕输入框提示需登录后发弹幕',
+                        };
+                    }
+
+                    if (avatar) {
+                        return {
+                            logged_in: true,
+                            user_name: '',
+                            message: '检测到登录用户头像，已登录',
+                        };
+                    }
+
+                    return {
+                        logged_in: false,
+                        user_name: '',
+                        message: '未检测到明确的用户登录标识',
+                    };
+                })()
+            """)
+            return res if isinstance(res, dict) else {"logged_in": False, "user_name": "", "message": str(res)}
+        except Exception as error:
+            return {"logged_in": False, "user_name": "", "message": f"检测登录态异常: {error}"}
+
+    def trigger_login(self) -> dict:
+        """主动触发平台登录弹窗（调出扫码登录界面）。
+
+        主播可以在弹出的 Chrome 浏览器中直接使用 APP 扫码登录。
+        登录后 Cookie 自动保存在持久化 profile 中，下次开播免登录。
+        返回字典：{"success": bool, "message": str}
+        """
+        res = self._dispatch_to_owner_thread(self._trigger_login_impl, timeout=5.0)
+        if isinstance(res, dict):
+            return res
+        return {"success": False, "message": str(res)}
+
+    def _trigger_login_impl(self) -> dict:
+        """主动触发平台登录弹窗（属主线程内部执行）。"""
+        if self._stop_event.is_set() or self.page is None:
+            return {"success": False, "message": "浏览器未启动或页面未加载"}
+
+        try:
+            status = self._check_login_status_impl()
+            if status.get("logged_in"):
+                return {"success": True, "already_logged_in": True, "message": "当前已处于登录状态，无需重复登录"}
+
+            # 1. 优先使用 Playwright Locator 原生点击（支持 React 合成事件）
+            selectors = [
+                'button:has-text("登录后发弹幕")',
+                'div:has-text("登录后发弹幕")',
+                'span:has-text("登录后发弹幕")',
+                'header button:has-text("登录")',
+                'header div:has-text("登录")',
+                '[data-e2e="header-login"]',
+                '[class*="header-login"]',
+                '[class*="login-button"]',
+                '[class*="login-btn"]',
+                'button:has-text("登录")',
+                'a:has-text("登录")',
+                'div[role="button"]:has-text("登录")',
+                '[class*="chat-input"] [class*="login"]',
+                '[class*="ChatInput"] [class*="login"]',
+                '[class*="chat-input"]',
+                '[class*="ChatInput"]',
+                'textarea[placeholder*="登录"]',
+            ]
+
+            for sel in selectors:
+                try:
+                    loc = self.page.locator(sel).first
+                    if loc.is_visible(timeout=200):
+                        loc.click(timeout=800)
+                        self.page.wait_for_timeout(300)
+                        if self._is_login_modal_open_impl():
+                            self.log_fn(f"已通过元素【{sel}】成功调起登录弹窗")
+                            return {"success": True, "message": "已调起扫码登录弹窗，请使用手机 APP 扫码登录"}
+                except Exception:
+                    continue
+
+            # 2. DOM evaluate 点击兜底
+            clicked = self.page.evaluate("""
+                (() => {
+                    const texts = ['登录后发弹幕', '登录', '立即登录', '扫码登录'];
+                    const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"], span, div'));
+                    for (const t of texts) {
+                        const match = candidates.find(el => {
+                            const text = (el.innerText || el.textContent || '').trim();
+                            return text === t && (el.offsetParent !== null || el.getClientRects().length > 0);
+                        });
+                        if (match) {
+                            match.click();
+                            return { clicked: true, text: t };
+                        }
+                    }
+
+                    const chat = document.querySelector('[class*="chat-input"], [class*="ChatInput"], textarea');
+                    if (chat && (chat.offsetParent !== null || chat.getClientRects().length > 0)) {
+                        chat.click();
+                        return { clicked: true, text: '聊天室输入区' };
+                    }
+
+                    return { clicked: false, text: '未找到登录入口' };
+                })()
+            """)
+
+            if clicked.get("clicked"):
+                self.log_fn(f"已触发平台登录入口：{clicked.get('text')}，请在浏览器中扫码登录")
+                return {
+                    "success": True,
+                    "message": f"已成功点击【{clicked.get('text')}】，请在浏览器窗口中使用 APP 扫码登录",
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "未在页面中找到可点击的登录按钮，请直接在浏览器窗口右上角点击【登录】",
+                }
+        except Exception as error:
+            self.log_fn(f"调起登录弹窗失败: {error}")
+            return {"success": False, "message": f"调起登录弹窗失败: {error}"}
+
+    def send_danmu_reply(self, text: str) -> dict:
+        """使用 Playwright 定位直播间弹幕输入框，输入内容并按回车发送回复。
+
+        :param text: 要发送的弹幕回复内容
+        :return: {"success": bool, "message": str}
+        """
+        text = str(text or "").strip()
+        if not text:
+            return {"success": False, "message": "回复文本内容为空"}
+        res = self._dispatch_to_owner_thread(lambda: self._send_danmu_reply_impl(text), timeout=6.0)
+        if isinstance(res, dict):
+            return res
+        return {"success": False, "message": str(res)}
+
+    def _send_danmu_reply_impl(self, text: str) -> dict:
+        """使用 Playwright 定位直播间弹幕输入框发送回复（属主线程内部执行）。"""
+        if self._stop_event.is_set() or self.page is None:
+            return {"success": False, "message": "浏览器未启动或页面已关闭"}
+
+        try:
+            # 1. 登录前置检查
+            login_info = self._check_login_status_impl()
+            if not login_info.get("logged_in") and "登录后发弹幕" in login_info.get("message", ""):
+                return {
+                    "success": False,
+                    "need_login": True,
+                    "message": "尚未登录平台账号（弹幕区提示需登录后发弹幕），请先扫码登录",
+                }
+
+            # 2. 定位输入框
+            candidate_selectors = [
+                'textarea[placeholder*="弹幕"]',
+                'textarea[placeholder*="聊聊"]',
+                'textarea[placeholder*="说点什么"]',
+                'textarea[placeholder*="发个弹幕"]',
+                '[class*="chat-input"] textarea',
+                '[class*="ChatInput"] textarea',
+                '[class*="input-area"] textarea',
+                '[class*="interactive-input"] textarea',
+                '[class*="chat_input"] textarea',
+                '[class*="editor"] textarea',
+                'div[contenteditable="true"][class*="chat"]',
+                'div[contenteditable="true"][class*="input"]',
+                'div[contenteditable="true"]',
+                'input[placeholder*="弹幕"]',
+                'input[placeholder*="聊聊"]',
+                'input[placeholder*="说点什么"]',
+                'textarea',
+            ]
+
+            input_locator = None
+            for sel in candidate_selectors:
+                try:
+                    loc = self.page.locator(sel).first
+                    if loc.is_visible(timeout=500):
+                        input_locator = loc
+                        break
+                except Exception:
+                    continue
+
+            # 3. 成功获取 Locator
+            if input_locator is not None:
+                input_locator.click()
+                self.page.wait_for_timeout(100)
+
+                try:
+                    input_locator.fill(text)
+                except Exception:
+                    input_locator.type(text)
+
+                self.page.wait_for_timeout(100)
+                input_locator.press("Enter")
+
+                try:
+                    send_btn = self.page.locator(
+                        'button:has-text("发送"), [class*="send-btn"], [class*="sendBtn"], [class*="send-button"]'
+                    ).first
+                    if send_btn.is_visible(timeout=300):
+                        send_btn.click()
+                except Exception:
+                    pass
+
+                self.log_fn(f"【弹幕回复】已在输入框提交回复: {text}")
+                return {"success": True, "message": f"弹幕已成功输入并按回车发送: {text}"}
+
+            # 4. DOM 原生注入兜底
+            res = self.page.evaluate("""
+                (msgText) => {
+                    const inputs = Array.from(document.querySelectorAll(
+                        'textarea, input[type="text"], div[contenteditable="true"]'
+                    )).filter(el => {
+                        const style = window.getComputedStyle(el);
+                        return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null;
+                    });
+
+                    if (inputs.length === 0) {
+                        return { success: false, message: '未找到可见的弹幕输入框' };
+                    }
+
+                    const target = inputs[inputs.length - 1];
+                    target.focus();
+                    if (target.isContentEditable) {
+                        target.innerText = msgText;
+                    } else {
+                        target.value = msgText;
+                    }
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                    target.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                    target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+                    const sendBtn = Array.from(document.querySelectorAll('button, div[role="button"], span')).find(el => {
+                        const t = (el.innerText || el.textContent || '').trim();
+                        return (t === '发送' || t === '发送弹幕') && el.offsetParent !== null;
+                    });
+                    if (sendBtn) {
+                        sendBtn.click();
+                    }
+
+                    return { success: true, message: '通过 DOM 事件输入并回车发送' };
+                }
+            """, text)
+
+            if isinstance(res, dict) and res.get("success"):
+                self.log_fn(f"【弹幕回复】(DOM兜底) 已提交回复: {text}")
+                return {"success": True, "message": f"弹幕已输入并按回车发送: {text}"}
+            else:
+                msg = res.get("message") if isinstance(res, dict) else str(res)
+                return {"success": False, "message": f"定位弹幕输入框失败: {msg}"}
+
+        except Exception as error:
+            self.log_fn(f"【弹幕回复】发送弹幕异常: {error}")
+            return {"success": False, "message": f"发送弹幕异常: {error}"}
 
     def http(self, response):
         """
@@ -314,7 +752,8 @@ def cleanup_browser_profile(user_data_dir: str):
             if self.platform == 'kuaishou' or any(d in ws_url for d in ('kuaishou.com', 'yximgs.com', 'gifshow.com', 'kwai.com', 'kskwai.com')):
                 self.log_fn(f"已捕获快手 WebSocket 连接: {websocket.url[:70]}")
                 websocket.on('framereceived', self.ks_onmessage)
-            elif 'douyin.com/webcast/im/push/' in ws_url or (self.platform == 'douyin' and 'im/push' in ws_url):
+            elif ('douyin.com' in ws_url and ('im/push' in ws_url or 'webcast' in ws_url)) or (self.platform == 'douyin' and ('im' in ws_url or 'webcast' in ws_url or 'push' in ws_url)):
+                self.log_fn(f"已捕获抖音 WebSocket 弹幕连接: {websocket.url[:70]}")
                 websocket.on('framereceived', self.dy_onmessage)
             elif 'tiktok' in ws_url or 'byteoversea' in ws_url or (self.platform == 'tiktok' and 'im' in ws_url):
                 websocket.on('framereceived', self.tk_onemssage)
@@ -383,11 +822,11 @@ def cleanup_browser_profile(user_data_dir: str):
 
     def dy_onmessage(self, framereceived):
         try:
-            if not self.headless and self.page is not None:
-                random_x = random.randint(100, 1000)
-                random_y = random.randint(100, 700)
-                self.page.mouse.move(random_x, random_y)
-            self.PostMessage(douyin_pb(data=framereceived))
+            if isinstance(framereceived, str):
+                return
+            messages = douyin_pb(data=framereceived)
+            if messages:
+                self.PostMessage(messages)
         except Exception as error:
             self.log_fn(f"抖音弹幕解析失败：{error}")
 

@@ -32,9 +32,15 @@ def _ramp_volume(session_vol, start_vol: float, end_vol: float, duration_sec: fl
 class SoftwareAudioDuckingManager:
     """Windows 进程级纯软件音频闪避器。"""
 
-    def __init__(self, target_process: str = "scrcpy.exe", duck_ratio: float = 0.25):
+    def __init__(self, target_process: str = "scrcpy.exe", duck_ratio: Optional[float] = None):
         self.target_process = target_process.lower()
-        self.duck_ratio = duck_ratio  # 压低后的音量比例（25%）
+        if duck_ratio is None:
+            try:
+                from settings import config
+                duck_ratio = float(config.load_config().get("audio_duck_ratio", 0.25))
+            except Exception:
+                duck_ratio = 0.25
+        self.duck_ratio = duck_ratio  # 压低后的音量比例（默认25%）
         self._lock = threading.Lock()
         self._is_ducked = False
         self._original_volume: float = 1.0

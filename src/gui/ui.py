@@ -37,6 +37,7 @@ btn_live_stop = None
 btn_cap = None
 btn_pwd = None
 btn_auth = None
+btn_settings = None
 btn_save = None
 btn_danmu = None
 ent_danmu_url = None
@@ -86,12 +87,16 @@ btn_open_txt3 = None
 lab_txt1_info = None
 lab_txt2_info = None
 lab_txt3_info = None
+lab_txt1_preview = None
+lab_txt2_preview = None
+lab_txt3_preview = None
 btn_close_notepads = None
 
 cmb_danmu_mode = None
 ent_deepseek_key = None
 chk_ai_reply = None
 var_ai_reply = None
+lbl_obs_link = None
 
 
 
@@ -290,14 +295,15 @@ def build_ui():
     global lab_count, lab_danmu_status, lab_auth_status, lab_auth_detail
     global embed_container, txt_danmu, txt_screen_log, txt_pre_meet
     global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_cap
-    global btn_pwd, btn_auth, btn_save, btn_danmu, btn_logout
+    global btn_pwd, btn_auth, btn_settings, btn_save, btn_danmu, btn_logout
     global ent_danmu_url, cmb_doubao_lang
     global volume_canvas, lab_vad_state, _volume_poll_started, _volume_after_id, _shutting_down
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
     global ent_r2min, ent_r2max, ent_cmd2, ent_r3min, ent_r3max, ent_cmd3, ent_interval
     global ent_deepseek_key, var_ai_reply, cmb_danmu_mode
     global btn_open_txt1, btn_open_txt2, btn_open_txt3, lab_txt1_info, lab_txt2_info, lab_txt3_info
-    global btn_close_notepads
+    global lab_txt1_preview, lab_txt2_preview, lab_txt3_preview
+    global btn_close_notepads, lbl_obs_link
 
     _shutting_down = False
     _volume_poll_started = False
@@ -373,6 +379,19 @@ def build_ui():
                            active=theme.SLATE_BTN_HOVER, width=8, font_size=8)
     btn_pwd.pack(side=tk.RIGHT, padx=3, pady=7)
 
+    def _open_settings():
+        try:
+            from gui.settings_dialog import open_settings_dialog
+            open_settings_dialog(root)
+        except Exception as e:
+            import tkinter.messagebox as mb
+            mb.showerror("错误", f"打开设置中心失败: {e}")
+
+    btn_settings = theme.button(auth_frame, "设置", color=theme.SLATE_BTN,
+                                active=theme.SLATE_BTN_HOVER, width=7, font_size=8,
+                                command=_open_settings)
+    btn_settings.pack(side=tk.RIGHT, padx=3, pady=7)
+
     # 预留底栏空间
     footer = tk.Frame(root, bg=theme.BG_ELEVATED, height=24)
     footer.pack(side=tk.BOTTOM, fill=tk.X)
@@ -446,26 +465,10 @@ def build_ui():
                             active=theme.PRIMARY_HOVER, width=9, font_size=9)
     btn_save.grid(row=0, column=4, pady=3, sticky="e")
 
-    # 第 2 行：直播间 | AI 回复 Key与开关 | 启动弹幕
+    # 第 2 行：直播间地址与手动启动弹幕按钮
     _section_label(cfg, "直播间", 1, 0, padx=(0, 6), pady=3, sticky="w")
     ent_danmu_url = theme.entry(cfg)
-    ent_danmu_url.grid(row=1, column=1, padx=(0, 10), pady=3, sticky="ew", ipady=2)
-
-    _section_label(cfg, "AI 回复", 1, 2, padx=(0, 6), pady=3, sticky="w")
-    f_llm = tk.Frame(cfg, bg=theme.SURFACE)
-    f_llm.grid(row=1, column=3, padx=(0, 10), pady=3, sticky="ew")
-
-    var_ai_reply = tk.BooleanVar(value=True)
-    chk_ai_reply = tk.Checkbutton(
-        f_llm, text="启用回复", variable=var_ai_reply,
-        bg=theme.SURFACE, fg=theme.TEXT_SOFT, selectcolor=theme.SURFACE_ALT,
-        activebackground=theme.SURFACE, activeforeground=theme.TEXT,
-        font=theme.font(9), padx=0, bd=0, highlightthickness=0,
-    )
-    chk_ai_reply.pack(side=tk.LEFT, padx=(0, 6))
-
-    ent_deepseek_key = theme.entry(f_llm)
-    ent_deepseek_key.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=2)
+    ent_danmu_url.grid(row=1, column=1, columnspan=3, padx=(0, 10), pady=3, sticky="ew", ipady=2)
 
     btn_danmu = theme.button(cfg, "🚀 启动弹幕", color=theme.TEAL,
                              active=theme.CYAN, width=9, font_size=9)
@@ -523,8 +526,9 @@ def build_ui():
     range_widgets = []
     txt_btns = []
     txt_labels = []
+    txt_previews = []
 
-    scripts.grid_columnconfigure(5, weight=1)
+    scripts.grid_columnconfigure(7, weight=1)
 
     for row, (title, _start, _end, key) in enumerate(script_rows_cfg):
         _section_label(scripts, title, row, 0, padx=(0, 4), pady=3, sticky="w")
@@ -541,23 +545,28 @@ def build_ui():
         )
         file_pill.grid(row=row, column=5, padx=(0, 4), sticky="w")
 
-        lab_info = theme.label(scripts, "(加载中)", muted=True, font_size=8, width=7, anchor="w")
+        lab_info = theme.label(scripts, "(加载中)", muted=True, font_size=8, width=6, anchor="w")
         lab_info.grid(row=row, column=6, padx=(0, 4), sticky="w")
+
+        lab_prev = theme.label(scripts, "...", muted=True, font_size=8, anchor="w", width=1)
+        lab_prev.grid(row=row, column=7, padx=(4, 8), sticky="ew")
 
         btn_open = theme.button(
             scripts, "📄 打开编辑",
             color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER, width=9, font_size=8,
             command=lambda k=key: _open_script_handler(k),
         )
-        btn_open.grid(row=row, column=7, pady=3, sticky="e")
+        btn_open.grid(row=row, column=8, pady=3, sticky="e")
 
         range_widgets.append((start_entry, end_entry))
         txt_btns.append(btn_open)
         txt_labels.append(lab_info)
+        txt_previews.append(lab_prev)
 
     (ent_r1min, ent_r1max), (ent_r2min, ent_r2max), (ent_r3min, ent_r3max) = range_widgets
     btn_open_txt1, btn_open_txt2, btn_open_txt3 = txt_btns
     lab_txt1_info, lab_txt2_info, lab_txt3_info = txt_labels
+    lab_txt1_preview, lab_txt2_preview, lab_txt3_preview = txt_previews
 
     # 3. 直播控制与音频活动（清晰分层，主控居中醒目，杜绝挤压）
     ctrl_card, controls = theme.card(ui_right, "直播控制与音频活动", accent=theme.PRIMARY, pady=6)
@@ -571,15 +580,7 @@ def build_ui():
         top_ctrl, style="Zhibodou.TCombobox",
         values=config.DOUBAO_LANGUAGES, width=7, state="readonly",
     )
-    cmb_doubao_lang.pack(side=tk.LEFT, padx=(0, 8))
-
-    theme.label(top_ctrl, "弹幕模式", muted=True, font_size=9).pack(side=tk.LEFT, padx=(0, 4))
-    from danma.hardware import ALL_MODE_DISPLAYS
-    cmb_danmu_mode = ttk.Combobox(
-        top_ctrl, style="Zhibodou.TCombobox",
-        values=ALL_MODE_DISPLAYS, width=18, state="readonly",
-    )
-    cmb_danmu_mode.pack(side=tk.LEFT, padx=(0, 12))
+    cmb_doubao_lang.pack(side=tk.LEFT, padx=(0, 12))
 
     btn_live_start = theme.button(top_ctrl, "▶ 启动直播", color=theme.GREEN_DARK,
                                   active=theme.GREEN, width=9, state=tk.DISABLED, font_size=9)
@@ -693,12 +694,17 @@ def build_ui():
     theme.label(obs_box, "OBS 浏览器音频源", bold=True, font_size=8, fg=theme.TEXT_SOFT, bg=theme.SURFACE_ALT).pack(fill=tk.X, pady=(0, 2))
     obs_row = tk.Frame(obs_box, bg=theme.SURFACE_ALT)
     obs_row.pack(fill=tk.X)
-    theme.label(obs_row, "http://127.0.0.1:8554/danmu_audio", fg=theme.CYAN, font_size=8, bg=theme.SURFACE_ALT).pack(side=tk.LEFT)
+    obs_port = config.load_config().get("obs_audio_port", 8554)
+    lbl_obs_link = theme.label(obs_row, f"http://127.0.0.1:{obs_port}/danmu_audio", fg=theme.CYAN, font_size=8, bg=theme.SURFACE_ALT)
+    lbl_obs_link.pack(side=tk.LEFT)
 
     def _copy_obs_link():
         try:
+            curr_port = config.load_config().get("obs_audio_port", 8554)
+            curr_url = f"http://127.0.0.1:{curr_port}/danmu_audio"
             root.clipboard_clear()
-            root.clipboard_append("http://127.0.0.1:8554/danmu_audio")
+            root.clipboard_append(curr_url)
+            lbl_obs_link.config(text=curr_url)
             btn_copy_obs.config(text="已复制", fg=theme.GREEN)
             root.after(1500, lambda: btn_copy_obs.config(text="复制", fg=theme.TEXT))
         except Exception:
@@ -730,35 +736,75 @@ def build_ui():
     ent_r3max.insert(0, cfg_load["r3_max"])
     refresh_script_labels()
 
-    # AI 弹幕回复硬件自适应与配置回填
+    # AI 弹幕回复硬件自适应探测
     try:
         from danma.hardware import detect_gpu_tier
         detected = detect_gpu_tier()
-        if cmb_danmu_mode:
-            cmb_danmu_mode.set(detected["display_name"])
         log_screen(f"【硬件探测】{detected['summary']}")
     except Exception:
         pass
 
-    if ent_deepseek_key:
-        ent_deepseek_key.insert(0, str(cfg_load.get("deepseek_api_key") or ""))
-    if var_ai_reply:
-        var_ai_reply.set(bool(cfg_load.get("ai_danmu_reply_enabled", True)))
-
 
 def refresh_script_labels():
-    """刷新 01.txt, 02.txt, 03.txt 文件的字数与就绪状态显示。"""
+    """刷新 01.txt, 02.txt, 03.txt 文件的字数与话术内容预览显示。"""
     try:
-        from broadcast.script_files import get_script_word_count, ensure_script_files_exist
+        from broadcast.script_files import (
+            get_script_word_count,
+            read_script_content,
+            ensure_script_files_exist,
+        )
+        import tkinter.font as tkfont
         ensure_script_files_exist()
-        pairs = (("01", lab_txt1_info), ("02", lab_txt2_info), ("03", lab_txt3_info))
-        for key, lbl in pairs:
+
+        triplets = (
+            ("01", lab_txt1_info, lab_txt1_preview),
+            ("02", lab_txt2_info, lab_txt2_preview),
+            ("03", lab_txt3_info, lab_txt3_preview),
+        )
+        for key, lbl, prev_lbl in triplets:
+            content = read_script_content(key).strip()
+            cnt = len(content)
             if lbl is not None:
-                cnt = get_script_word_count(key)
                 if cnt > 0:
                     lbl.config(text=f"({cnt}字)", fg="#86efac")
                 else:
                     lbl.config(text="(空)", fg="#fbbf24")
+
+            if prev_lbl is not None:
+                prev_lbl._raw_script = content
+
+                def _render_preview(lbl_widget=prev_lbl):
+                    raw = getattr(lbl_widget, "_raw_script", "")
+                    cleaned = " ".join(raw.split()).strip()
+                    if not cleaned:
+                        lbl_widget.config(text="（空内容）...", fg=theme.TEXT_FAINT)
+                        return
+                    w = lbl_widget.winfo_width()
+                    ell = "..."
+                    # 若控件尚未在屏幕完成初次布局 (w <= 20)，先按标准 25 字展示
+                    if w <= 20:
+                        disp = (cleaned[:25] + ell) if len(cleaned) > 25 else (cleaned + ell)
+                        lbl_widget.config(text=disp, fg=theme.TEXT_MUTED)
+                        return
+                    try:
+                        f_obj = tkfont.Font(font=lbl_widget["font"])
+                        ell_w = f_obj.measure(ell)
+                        avail = max(30, w - ell_w - 6)
+                        cur = ""
+                        for ch in cleaned:
+                            if f_obj.measure(cur + ch) > avail:
+                                break
+                            cur += ch
+                        disp = (cur or cleaned[:15]) + ell
+                    except Exception:
+                        disp = (cleaned[:25] + ell) if len(cleaned) > 25 else (cleaned + ell)
+                    lbl_widget.config(text=disp, fg=theme.TEXT_MUTED)
+
+                _render_preview(prev_lbl)
+                if not getattr(prev_lbl, "_bound_cfg", False):
+                    prev_lbl.bind("<Configure>", lambda e, l=prev_lbl: _render_preview(l))
+                    prev_lbl._bound_cfg = True
+
     except Exception:
         pass
 

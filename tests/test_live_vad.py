@@ -15,8 +15,10 @@ from broadcast import live
 class ResultMonitor:
     def __init__(self, result):
         self.result = result
+        self.last_kwargs = {}
 
-    def wait_for_doubao_speech_cycle(self, **_kwargs):
+    def wait_for_doubao_speech_cycle(self, **kwargs):
+        self.last_kwargs = kwargs
         return self.result
 
     def close(self):
@@ -65,6 +67,41 @@ class LiveDispatchAndVadSafetyTests(unittest.TestCase):
                 mock.patch.object(live.ui, "reset_volume_meter"):
             live.wait_next_round_worker(ResultMonitor(VAD_ENDED), 0, None, self._cfg())
         self.assertTrue(live.can_next_speak)
+
+    def test_wait_next_round_worker_allows_sub_25s_wait_start(self):
+        """测试 wait_start 为 15.0s 时不会被强制夹紧到 25.0s"""
+        mon = ResultMonitor(VAD_ENDED)
+        with mock.patch.object(live.ui, "log_screen"), \
+                mock.patch.object(live.ui, "reset_volume_meter"):
+            live.wait_next_round_worker(
+                mon, 0, None, {"wait_start": 15.0, "silence_hold": 4.0}
+            )
+        self.assertEqual(mon.last_kwargs.get("max_wait_start_sec"), 15.0)
+
+    def test_wait_next_round_worker_clamps_to_5s_safety_floor(self):
+        """测试 wait_start 低于 5.0s 时被安全兜底为 5.0s"""
+        mon = ResultMonitor(VAD_ENDED)
+        with mock.patch.object(live.ui, "log_screen"), \
+                mock.patch.object(live.ui, "reset_volume_meter"):
+            live.wait_next_round_worker(
+                mon, 0, None, {"wait_start": 2.0, "silence_hold": 4.0}
+            )
+        self.assertEqual(mon.last_kwargs.get("max_wait_start_sec"), 5.0)
+
+    def test_read_vad_config_defaults_and_clamping(self):
+        """测试 _read_vad_config 默认读取 DEFAULT_CFG 且支持低于 25s 设置"""
+        with mock.patch.object(live.config, "load_config", return_value={}):
+            cfg = live._read_vad_config()
+            expected_default = float(live.config.DEFAULT_CFG.get("vad_wait_start_sec", 15.0))
+            self.assertEqual(cfg["wait_start"], expected_default)
+
+        with mock.patch.object(live.config, "load_config", return_value={"vad_wait_start_sec": 12.0}):
+            cfg = live._read_vad_config()
+            self.assertEqual(cfg["wait_start"], 12.0)
+
+        with mock.patch.object(live.config, "load_config", return_value={"vad_wait_start_sec": 2.0}):
+            cfg = live._read_vad_config()
+            self.assertEqual(cfg["wait_start"], 5.0)
 
     def test_every_doubao_prompt_is_constrained_to_host_speech(self):
         with mock.patch.object(

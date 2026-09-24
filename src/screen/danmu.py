@@ -221,6 +221,8 @@ def process_message(message: dict):
         state.last_danmu_text = content
         _set_capture_ui("接收中", "#34d399", True)
         _append_danmu(name, content)
+        if state.comment_cnt == 1:
+            ui.log_screen(f"【弹幕采集】💬 收到实时弹幕：[{name}] {content}")
         _dispatch_ai_reply(message)
         return
     if msg_type == "MemberMessage":
@@ -235,20 +237,24 @@ def _drain_ui_queue():
     if ui.is_shutting_down():
         _ui_after_id = None
         return
-    for _ in range(_UI_BATCH_SIZE):
-        try:
-            message = state.danmu_queue.get_nowait()
-        except queue.Empty:
-            break
-        try:
-            process_message(message)
-        except Exception as exc:
-            ui.log_screen(f"【弹幕采集】消息处理失败：{exc}")
     try:
-        if ui.root and ui.root.winfo_exists():
-            _ui_after_id = ui.root.after(_UI_POLL_MS, _drain_ui_queue)
-    except tk.TclError:
-        _ui_after_id = None
+        for _ in range(_UI_BATCH_SIZE):
+            try:
+                message = state.danmu_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                process_message(message)
+            except Exception as exc:
+                ui.log_screen(f"【弹幕采集】消息处理失败：{exc}")
+    finally:
+        try:
+            if ui.root and ui.root.winfo_exists() and not ui.is_shutting_down():
+                _ui_after_id = ui.root.after(_UI_POLL_MS, _drain_ui_queue)
+            else:
+                _ui_after_id = None
+        except tk.TclError:
+            _ui_after_id = None
 
 
 def initialize_ui_pump():
@@ -413,3 +419,37 @@ def toggle_danmu_capture():
 # 兼容旧调用名；旧版外部 ws://127.0.0.1:8899 链路已移除。
 def ws_danmu_loop():
     return start_danmu_capture()
+
+
+def check_login_status() -> dict:
+    """检查当前采集器所在的浏览器是否已登录平台账号。"""
+    collector = getattr(state, "danmu_collector", None)
+    if collector and hasattr(collector, "check_login_status"):
+        return collector.check_login_status()
+    return {"logged_in": False, "message": "弹幕采集器未运行或未启动浏览器"}
+
+
+def trigger_login() -> dict:
+    """调出平台的登录弹窗（扫码登录）。"""
+    collector = getattr(state, "danmu_collector", None)
+    if collector and hasattr(collector, "trigger_login"):
+        return collector.trigger_login()
+    return {"success": False, "message": "弹幕采集器未运行或未启动浏览器"}
+
+
+def is_login_modal_open() -> bool:
+    """检查当前采集器所在的浏览器是否已显示登录/扫码弹窗。"""
+    collector = getattr(state, "danmu_collector", None)
+    if collector and hasattr(collector, "is_login_modal_open"):
+        return collector.is_login_modal_open()
+    return False
+
+
+def send_danmu_reply(text: str) -> dict:
+    """在当前直播间弹幕输入框中输入文本并按回车发送。"""
+    collector = getattr(state, "danmu_collector", None)
+    if collector and hasattr(collector, "send_danmu_reply"):
+        return collector.send_danmu_reply(text)
+    return {"success": False, "message": "弹幕采集器未运行或未启动浏览器"}
+
+

@@ -34,6 +34,9 @@ LOGS_DIR = os.path.join(BASE_DIR, "logs")
 APK_DIR = os.path.join(BASE_DIR, "apk")
 ADBKEYBOARD_APK = os.path.join(APK_DIR, "ADBKeyBoard.apk")
 CLIPPER_APK = os.path.join(APK_DIR, "clipper.apk")
+ZHIBODOU_AGENT_APK = os.path.join(BASE_DIR, "android_agent", "app", "release", "app-release.apk")
+if not os.path.exists(ZHIBODOU_AGENT_APK):
+    ZHIBODOU_AGENT_APK = os.path.join(APK_DIR, "app-release.apk")
 
 # Scrcpy 与 ADB 路径
 SCRCPY_DIR = os.path.join(BASE_DIR, "scrcpy")
@@ -86,6 +89,9 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     APK_DIR = os.path.join(RESOURCE_DIR, "apk")
     ADBKEYBOARD_APK = os.path.join(APK_DIR, "ADBKeyBoard.apk")
     CLIPPER_APK = os.path.join(APK_DIR, "clipper.apk")
+    ZHIBODOU_AGENT_APK = os.path.join(APK_DIR, "app-release.apk")
+    if not os.path.exists(ZHIBODOU_AGENT_APK):
+        ZHIBODOU_AGENT_APK = os.path.join(RUNTIME_DIR, "android_agent", "app", "release", "app-release.apk")
 
     CONFIG_JSON = os.path.join(RUNTIME_DIR, "config.json")
     DATA_DIR = os.path.join(RUNTIME_DIR, "data")

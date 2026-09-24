@@ -45,6 +45,14 @@ class AIReplyWorker:
         """根据最新配置初始化 TTS 引擎。"""
         cfg = config.load_config() or {}
         tier = self.hardware_info.get("tier", "playwright")
+        mode_str = str(cfg.get("danmu_mode") or "").lower()
+        if "indextts" in mode_str or "index_tts" in mode_str:
+            tier = "index_tts"
+        elif "moss" in mode_str:
+            tier = "moss_tts"
+        elif "playwright" in mode_str:
+            tier = "playwright"
+
         self.tts_engine = create_tts_engine(tier, cfg)
         logger.info(
             "AI 回复引擎初始化完成: Tier=%s, TTS=%s",
@@ -147,9 +155,22 @@ class AIReplyWorker:
         reply_text = str(res.get("reply_text") or "").strip()
         ui.log_screen(f"【AI弹幕回复】[{reply_type}] 决策: {reply_text}")
 
-        # 2. 纯文本模式 (Tier C / Playwright 预留)
+        # 2. 纯文本模式 (Tier C / Playwright 公屏打字回复)
         if self.tts_engine.is_text_only():
-            ui.log_screen(f"【AI弹幕回复】[公屏打字回复·预留] 拟发送: {reply_text}")
+            from core import state
+            collector = getattr(state, "danmu_collector", None)
+            if collector and hasattr(collector, "send_danmu_reply"):
+                ui.log_screen(f"【AI弹幕回复】[Playwright公屏打字] 正在输入回复: {reply_text}")
+                reply_res = collector.send_danmu_reply(reply_text)
+                if reply_res.get("success"):
+                    ui.log_screen(f"【AI弹幕回复】✅ 公屏弹幕回复已成功发送: {reply_text}")
+                else:
+                    err_msg = reply_res.get("message")
+                    ui.log_screen(f"【AI弹幕回复】⚠ 公屏回复发送未成功: {err_msg}")
+                    if reply_res.get("need_login"):
+                        ui.log_screen("【AI弹幕回复】💡 提示：请在打开的浏览器中登录平台账号（扫码登录）后方可发送弹幕")
+            else:
+                ui.log_screen(f"【AI弹幕回复】[公屏打字] 采集器尚未就绪，拟发送: {reply_text}")
             return
 
         # 3. 冷却防炸麦保护

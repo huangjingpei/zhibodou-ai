@@ -69,6 +69,8 @@ DEFAULT_CFG = {
     # 仅统计指标模式：true = 打开浏览器只统计 实时在线/累计点赞/礼物互动，
     # 不采集弹幕文本（聊天/进场/关注分享均不下发）；false = 完整弹幕采集。
     "danmu_metrics_only": False,
+    # 弹幕回复硬件模式：【自适应】IndexTTS 旗舰语音 / MOSS-TTS-Nano / Playwright 文本回复
+    "danmu_mode": "",
     "danmu_user_data_dir": "",
     "danmu_chrome_path": "",
     "danmu_urls": {
@@ -120,8 +122,11 @@ DEFAULT_CFG = {
     # "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)"
     # 实验：手机豆包声送真实扬声器外放；本机真实输出设备名为「扬声器 (Realtek(R) Audio)」，
     #      且它正是当前 Windows 默认播放设备，故填 "扬声器" 即可过路由闸门（勿填"电脑扬声器"，那只是输入回环）。
-    "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)"
-
+    "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)",
+    # 软件声音闪避压低比例（默认 0.25 即 25%）
+    "audio_duck_ratio": 0.25,
+    # OBS MPEG-TS 音频推流端口（默认 8554）
+    "obs_audio_port": 8554,
 }
 
 

@@ -110,68 +110,263 @@ def get_script_word_count(key: str) -> int:
     return len(read_script_content(key))
 
 
+def _find_notepad_hwnds(patterns: list[str]) -> list[tuple[int, str, int]]:
+    """查找标题中包含任一匹配模式的记事本窗口 [(hwnd, title, pid)]。"""
+    matched = []
+    if os.name != "nt":
+        return matched
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        EnumWindows = user32.EnumWindows
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        GetWindowTextW = user32.GetWindowTextW
+        GetWindowTextLengthW = user32.GetWindowTextLengthW
+        GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+
+        def foreach_window(hwnd, lParam):
+            length = GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buff = ctypes.create_unicode_buffer(length + 1)
+                GetWindowTextW(hwnd, buff, length + 1)
+                title = buff.value
+                for p in patterns:
+                    if p in title:
+                        pid = ctypes.c_ulong()
+                        GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        matched.append((hwnd, title, pid.value))
+                        break
+            return True
+
+        EnumWindows(EnumWindowsProc(foreach_window), 0)
+    except Exception:
+        pass
+    return matched
+
+
+def _find_notepad_pids(patterns: list[str]) -> set[int]:
+    """查找打开了指定文件的记事本进程 PID（含 Win11 商店版 AppX 会话识别）。"""
+    pids = set()
+    b64_map = {
+        "01.txt": "ADAAMQAuAHQAeAB0",
+        "02.txt": "ADAAMgAuAHQAeAB0",
+        "03.txt": "ADAAMwAuAHQAeAB0",
+    }
+    b64_targets = [b64_map[p] for p in patterns if p in b64_map]
+
+    try:
+        import psutil
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            name = (proc.info["name"] or "").lower()
+            if "notepad" in name:
+                cmd = " ".join(proc.info["cmdline"] or [])
+                if any(p in cmd for p in patterns) or any(b in cmd for b in b64_targets):
+                    pids.add(proc.info["pid"])
+    except Exception:
+        pass
+    return pids
+
+
+def is_script_notepad_open(key: str) -> bool:
+    """检查指定话术文件当前是否在记事本中处于打开状态。"""
+    filename = SCRIPT_FILENAME_MAP.get(str(key).strip(), f"{key}.txt")
+    if _find_notepad_hwnds([filename]):
+        return True
+    if _find_notepad_pids([filename]):
+        return True
+    with _track_lock:
+        info = _tracked_notepads.get(key)
+        if info and info.get("proc") and info["proc"].poll() is None:
+            return True
+    return False
+
+
+def is_any_notepad_open() -> bool:
+    """检查当前是否有话术记事本处于打开状态。"""
+    patterns = [f"{k}.txt" for k in SCRIPT_KEYS]
+    if _find_notepad_hwnds(patterns):
+        return True
+    if _find_notepad_pids(patterns):
+        return True
+    with _track_lock:
+        for info in _tracked_notepads.values():
+            proc = info.get("proc")
+            if proc and proc.poll() is None:
+                return True
+    return False
+
+
+def close_script_notepad(key: str, log_fn: Optional[Callable[[str], None]] = None) -> bool:
+    """关闭指定话术的记事本窗口与对应进程。"""
+    filename = SCRIPT_FILENAME_MAP.get(str(key).strip(), f"{key}.txt")
+    hwnds = _find_notepad_hwnds([filename])
+    pids = _find_notepad_pids([filename])
+    closed_any = False
+
+    # 1. 发送 WM_CLOSE 消息平滑关闭
+    if os.name == "nt":
+        try:
+            import ctypes
+            for hwnd, title, pid in hwnds:
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)
+                if pid:
+                    pids.add(pid)
+                closed_any = True
+        except Exception:
+            pass
+
+    # 2. 检查残留并安全终止
+    if pids:
+        time.sleep(0.3)
+        try:
+            import psutil
+            for pid in pids:
+                try:
+                    p = psutil.Process(pid)
+                    if p.is_running():
+                        p.terminate()
+                        closed_any = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    with _track_lock:
+        info = _tracked_notepads.pop(key, None)
+        if info:
+            proc = info.get("proc")
+            if proc:
+                try:
+                    if proc.poll() is None:
+                        proc.terminate()
+                        closed_any = True
+                except Exception:
+                    pass
+            on_saved = info.get("on_saved")
+            if on_saved:
+                try:
+                    on_saved(key)
+                except Exception:
+                    pass
+
+    return closed_any
+
+
+def close_all_script_notepads(log_fn: Optional[Callable[[str], None]] = None) -> int:
+    """关闭所有当前打开的话术记事本（01.txt, 02.txt, 03.txt）。返回成功关闭的窗口/进程计数。"""
+    closed_count = 0
+    patterns = [f"{k}.txt" for k in SCRIPT_KEYS]
+
+    hwnds = _find_notepad_hwnds(patterns)
+    pids = _find_notepad_pids(patterns)
+
+    # 1. 优先通过 Win32 WM_CLOSE 优雅关闭
+    if os.name == "nt":
+        try:
+            import ctypes
+            for hwnd, title, pid in hwnds:
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)
+                if pid:
+                    pids.add(pid)
+                closed_count += 1
+        except Exception:
+            pass
+
+    # 2. 对相关进程做兜底退出
+    if pids:
+        time.sleep(0.3)
+        try:
+            import psutil
+            for pid in pids:
+                try:
+                    p = psutil.Process(pid)
+                    if p.is_running():
+                        p.terminate()
+                        closed_count += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 3. 兼容传统 Popen 追踪项与回调调用
+    with _track_lock:
+        for key, info in list(_tracked_notepads.items()):
+            proc = info.get("proc")
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        proc.terminate()
+                        closed_count += 1
+                except Exception:
+                    pass
+            on_saved = info.get("on_saved")
+            if on_saved:
+                try:
+                    on_saved(key)
+                except Exception:
+                    pass
+        _tracked_notepads.clear()
+
+    if closed_count > 0 and log_fn:
+        try:
+            log_fn(f"【话术策略】已关闭 {closed_count} 个话术记事本窗口。")
+        except Exception:
+            pass
+    return closed_count
+
+
 def _monitor_loop() -> None:
-    """后台监听器：轮询已打开的记事本，当检测到文件保存（mtime 变化）后自动关闭记事本。"""
+    """后台监听器：轮询已打开的话术文件，当检测到文件保存（mtime 变化）后自动关闭记事本。"""
     while not _monitor_stop_event.is_set():
         time.sleep(0.4)
         with _track_lock:
             if not _tracked_notepads:
                 continue
-            to_remove = []
-            for key, info in list(_tracked_notepads.items()):
-                proc: subprocess.Popen = info.get("proc")
+            keys = list(_tracked_notepads.keys())
+
+        for key in keys:
+            with _track_lock:
+                info = _tracked_notepads.get(key)
+                if not info:
+                    continue
                 path: str = info.get("path")
                 initial_mtime: float = info.get("mtime", 0.0)
+                launch_time: float = info.get("launch_time", 0.0)
                 on_saved: Optional[Callable] = info.get("on_saved")
                 log_fn: Callable = info.get("log_fn", print)
 
-                if proc is None:
-                    to_remove.append(key)
-                    continue
+            # 检查文件是否被保存（修改时间增加）
+            try:
+                curr_mtime = os.path.getmtime(path)
+            except Exception:
+                curr_mtime = initial_mtime
 
-                # 检查进程是否已被人为手动关闭
-                if proc.poll() is not None:
-                    to_remove.append(key)
-                    if on_saved:
-                        try:
-                            on_saved(key)
-                        except Exception:
-                            pass
-                    continue
-
-                # 检查文件是否被保存（修改时间增加）
+            if curr_mtime > initial_mtime:
+                # 延时 0.25s 确保完全写盘
+                time.sleep(0.25)
+                close_script_notepad(key)
+                filename = os.path.basename(path)
                 try:
-                    curr_mtime = os.path.getmtime(path)
+                    log_fn(f"【话术策略】✅ 检测到 {filename} 已保存，记事本已自动关闭。")
                 except Exception:
-                    curr_mtime = initial_mtime
-
-                if curr_mtime > initial_mtime:
-                    # 延时 0.25s 确保记事本完全写盘
-                    time.sleep(0.25)
+                    pass
+                if on_saved:
                     try:
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=0.8)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
+                        on_saved(key)
                     except Exception:
                         pass
+                continue
 
-                    filename = os.path.basename(path)
-                    try:
-                        log_fn(f"【话术策略】✅ 检测到 {filename} 已保存，记事本已自动关闭。")
-                    except Exception:
-                        pass
-
+            # 检查窗口是否已被用户手动关闭（启动后给予 2.5s 缓冲）
+            if time.time() - launch_time > 2.5:
+                if not is_script_notepad_open(key):
+                    with _track_lock:
+                        _tracked_notepads.pop(key, None)
                     if on_saved:
                         try:
                             on_saved(key)
                         except Exception:
                             pass
-                    to_remove.append(key)
-
-            for key in to_remove:
-                _tracked_notepads.pop(key, None)
 
 
 def _ensure_monitor_running() -> None:
@@ -192,88 +387,49 @@ def open_script_notepad(
     on_saved: Optional[Callable[[str], None]] = None,
     log_fn: Callable[[str], None] = print,
 ) -> bool:
-    """调用系统记事本 notepad.exe 打开指定话术 txt 文件并开启保存监听。
-
-    :param key: '01' | '02' | '03'
-    :param on_saved: 文件保存或关闭后的回调函数 (接收 key 参数)
-    :param log_fn: 日志输出函数
-    :return: 是否成功拉起记事本
-    """
+    """调用系统记事本 notepad.exe 打开指定话术 txt 文件并开启保存监听。"""
     ensure_script_files_exist()
     path = get_script_path(key)
     if not os.path.exists(path):
         return False
 
+    filename = os.path.basename(path)
+
+    # 1. 若当前记事本已在运行，前置激活它
+    if is_script_notepad_open(key):
+        if os.name == "nt":
+            try:
+                import ctypes
+                hwnds = _find_notepad_hwnds([filename])
+                if hwnds:
+                    ctypes.windll.user32.SetForegroundWindow(hwnds[0][0])
+            except Exception:
+                pass
+        log_fn(f"【话术策略】{filename} 记事本已在运行中，请在当前窗口中编辑。")
+        return True
+
+    # 2. 启动系统记事本
+    try:
+        curr_mtime = os.path.getmtime(path)
+    except Exception:
+        curr_mtime = time.time()
+
+    try:
+        proc = subprocess.Popen(["notepad.exe", path])
+    except Exception as exc:
+        log_fn(f"【话术策略】❌ 调用系统记事本失败：{exc}")
+        return False
+
     with _track_lock:
-        # 如果已经打开了同一个记事本且仍在运行，不再重复打开
-        existing = _tracked_notepads.get(key)
-        if existing and existing.get("proc") and existing["proc"].poll() is None:
-            filename = os.path.basename(path)
-            log_fn(f"【话术策略】{filename} 记事本已在运行中，请在当前窗口中编辑。")
-            return True
-
-        try:
-            curr_mtime = os.path.getmtime(path)
-        except Exception:
-            curr_mtime = time.time()
-
-        try:
-            proc = subprocess.Popen(["notepad.exe", path])
-        except Exception as exc:
-            log_fn(f"【话术策略】❌ 调用系统记事本失败：{exc}")
-            return False
-
         _tracked_notepads[key] = {
             "proc": proc,
             "path": path,
             "mtime": curr_mtime,
+            "launch_time": time.time(),
             "on_saved": on_saved,
             "log_fn": log_fn,
         }
 
     _ensure_monitor_running()
-    filename = os.path.basename(path)
     log_fn(f"【话术策略】📖 已打开 {filename}，修改后直接按 Ctrl+S 保存将自动关闭记事本。")
     return True
-
-
-def close_all_script_notepads(log_fn: Optional[Callable[[str], None]] = None) -> int:
-    """关闭所有当前通过本软件打开的话术记事本进程。返回关闭的进程数。"""
-    closed_count = 0
-    with _track_lock:
-        for key, info in list(_tracked_notepads.items()):
-            proc: subprocess.Popen = info.get("proc")
-            if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=0.6)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    closed_count += 1
-                except Exception:
-                    pass
-            on_saved = info.get("on_saved")
-            if on_saved:
-                try:
-                    on_saved(key)
-                except Exception:
-                    pass
-        _tracked_notepads.clear()
-
-    if closed_count > 0 and log_fn:
-        try:
-            log_fn(f"【话术策略】已关闭 {closed_count} 个话术记事本窗口。")
-        except Exception:
-            pass
-    return closed_count
-
-
-def is_any_notepad_open() -> bool:
-    """检查当前是否有话术记事本处于打开状态。"""
-    with _track_lock:
-        for info in _tracked_notepads.values():
-            proc = info.get("proc")
-            if proc and proc.poll() is None:
-                return True
-    return False
