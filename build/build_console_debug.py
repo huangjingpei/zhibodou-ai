@@ -31,7 +31,14 @@ if os.path.isdir(SCRCPY_DIR):
 else:
     print(f"[WARN] scrcpy 目录不存在: {SCRCPY_DIR}")
 
-# apk 目录
+# apk 目录（自动同步最新的 android_agent APK）
+agent_apk = os.path.join(ROOT, "android_agent", "app", "release", "app-release.apk")
+target_apk = os.path.join(ROOT, "apk", "app-release.apk")
+if os.path.exists(agent_apk):
+    os.makedirs(os.path.dirname(target_apk), exist_ok=True)
+    if not os.path.exists(target_apk) or os.path.getmtime(agent_apk) >= os.path.getmtime(target_apk):
+        shutil.copy2(agent_apk, target_apk)
+
 APK_DIR = os.path.join(ROOT, "apk")
 if os.path.isdir(APK_DIR):
     for fname in os.listdir(APK_DIR):

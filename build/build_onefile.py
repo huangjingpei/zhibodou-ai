@@ -16,6 +16,15 @@ import PyInstaller.__main__
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根 E:\zhibodou-ai\zhibodou
 SRC = os.path.join(ROOT, "src")
 
+# 自动同步最新的 android_agent APK 到 apk 资源目录（确保打包进 exe 的是最新版本）
+agent_apk = os.path.join(ROOT, "android_agent", "app", "release", "app-release.apk")
+target_apk = os.path.join(ROOT, "apk", "app-release.apk")
+if os.path.exists(agent_apk):
+    import shutil
+    os.makedirs(os.path.dirname(target_apk), exist_ok=True)
+    if not os.path.exists(target_apk) or os.path.getmtime(agent_apk) >= os.path.getmtime(target_apk):
+        shutil.copy2(agent_apk, target_apk)
+
 # 冻结态修复运行时钩子（与测试/交付构建保持一致）：
 # - rth_asyncio.py     ：修复 asyncio 子模块名未绑定（NameError: base_events）
 # - rth_isolated_shim.py：中和 PyInstaller.isolated（code must be code 崩溃）

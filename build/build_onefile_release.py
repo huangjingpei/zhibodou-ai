@@ -13,6 +13,16 @@ import PyInstaller.__main__
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根 E:\zhibodou-ai\zhibodou
 SRC = os.path.join(ROOT, "src")
+
+# 自动同步最新的 android_agent APK 到 apk 资源目录（确保打包进 exe 的是最新版本）
+agent_apk = os.path.join(ROOT, "android_agent", "app", "release", "app-release.apk")
+target_apk = os.path.join(ROOT, "apk", "app-release.apk")
+if os.path.exists(agent_apk):
+    import shutil
+    os.makedirs(os.path.dirname(target_apk), exist_ok=True)
+    if not os.path.exists(target_apk) or os.path.getmtime(agent_apk) >= os.path.getmtime(target_apk):
+        shutil.copy2(agent_apk, target_apk)
+
 RTH = os.path.join(ROOT, "build", "rth_asyncio.py")
 # 交付版专属：注入生产 PDK 后端（https://pdk.graddu.com）。
 # debug/测试构建（build_onefile.py / build_console_debug.py）不挂此钩子，
