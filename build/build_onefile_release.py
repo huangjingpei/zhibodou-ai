@@ -46,7 +46,9 @@ PyInstaller.__main__.run([
     "--name", "zhibodou",
     "--paths", SRC,
     "--paths", os.path.join(SRC, "danma"),   # 让 live_plate 作为顶层包被 PyInstaller 分析发现（danma/main.py 用绝对导入 `from live_plate`，运行期靠 sys.path 注入可达，但静态分析需此路径）
+    "--paths", os.path.join(SRC, "streamget"), # 让 streamget 作为顶层包被 PyInstaller 分析发现
     "--collect-submodules", "danma",   # 递归收集 danma 包（含 live_plate 及全部子模块，避免 No module named 'live_plate'）
+    "--collect-submodules", "streamget", # 递归收集 streamget 包及所有平台子模块
     "--noconfirm",               # 非交互重建：已有 dist/work 时直接覆盖
     "--runtime-hook", RTH,
     "--runtime-hook", RTH_PDK_RELEASE,
@@ -54,11 +56,17 @@ PyInstaller.__main__.run([
     "--runtime-hook", RTH_LIVEPLATE,
     "--add-data", os.path.join(ROOT, "scrcpy") + ";" + "scrcpy",
     "--add-data", os.path.join(ROOT, "apk") + ";" + "apk",
+    "--add-data", os.path.join(SRC, "streamget", "streamget", "js") + ";" + "streamget/js",
     "--hidden-import", "playwright",
     "--hidden-import", "playwright.sync_api",
     "--hidden-import", "playwright._impl",
     "--hidden-import", "greenlet",
 ] + [item for m in ASYNCIO_HIDDEN for item in ("--hidden-import", m)] + [
+    "--hidden-import", "streamget",
+    "--hidden-import", "execjs",
+    "--hidden-import", "loguru",
+    "--hidden-import", "Crypto",
+    "--hidden-import", "httpx",
     "--hidden-import", "pyscreeze",
     "--hidden-import", "pygetwindow",
     "--hidden-import", "pyperclip",

@@ -39,6 +39,14 @@ if os.path.isdir(APK_DIR):
         if os.path.isfile(src):
             datas.append(f"{src};apk")
 
+# streamget js 资源
+STREAMGET_JS_DIR = os.path.join(ROOT, "src", "streamget", "streamget", "js")
+if os.path.isdir(STREAMGET_JS_DIR):
+    for fname in os.listdir(STREAMGET_JS_DIR):
+        src = os.path.join(STREAMGET_JS_DIR, fname)
+        if os.path.isfile(src):
+            datas.append(f"{src};streamget/js")
+
 # 隐藏导入（与交付版 build_onefile_release.py 保持一致，确保能真正运行出日志）
 hidden = [
     "pywintypes", "pythoncom", "win32api", "win32gui", "win32con",
@@ -47,6 +55,7 @@ hidden = [
     "mouseinfo", "pytweening", "pyrect", "PIL", "PIL.Image",
     "pyaudio", "pyttsx3", "comtypes",
     "websocket", "websocket_client",
+    "streamget", "execjs", "loguru", "Crypto", "httpx",
     "playwright", "playwright.sync_api", "playwright._impl", "greenlet",
 ]
 
