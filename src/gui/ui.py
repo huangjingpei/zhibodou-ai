@@ -38,12 +38,84 @@ btn_cap = None
 btn_pwd = None
 btn_auth = None
 btn_settings = None
+btn_logs = None
 btn_save = None
 btn_danmu = None
 ent_danmu_url = None
 cmb_doubao_lang = None
 ent_prod_name = None
 ent_prod_desc = None
+
+# StreamGet & OBS 串流联动控件引用
+ent_stream_input = None
+cmb_stream_quality = None
+cmb_stream_format = None
+ent_stream_url = None
+chk_auto_obs = None
+var_auto_obs = None
+btn_parse_stream = None
+btn_sync_obs = None
+lab_stream_meta = None
+lab_obs_sync_status = None
+
+# 内存日志缓冲区
+_log_history: list = []
+
+
+def get_log_history() -> str:
+    """获取系统运行以来的完整日志历史文本。"""
+    return "".join(_log_history)
+
+
+class DanmuTextAdapter:
+    """弹幕文本兼容适配器（主界面精简弹幕框后，确保原有调用保持静默安全）。"""
+    def insert(self, *a, **k):
+        pass
+    def see(self, *a, **k):
+        pass
+    def delete(self, *a, **k):
+        pass
+    def index(self, *a, **k):
+        return "1.0"
+
+
+class TextLogAdapter:
+    """运行日志兼容适配器（同步对接独立运行日志弹窗与内存缓冲区）。"""
+    def insert(self, pos, text=""):
+        global _log_history
+        s = str(text)
+        _log_history.append(s)
+        if len(_log_history) > 2000:
+            del _log_history[:500]
+        try:
+            from gui.log_dialog import get_active_log_dialog
+            dlg = get_active_log_dialog()
+            if dlg:
+                dlg.append_log(s)
+        except Exception:
+            pass
+
+    def see(self, *a, **k):
+        pass
+
+    def delete(self, *a, **k):
+        global _log_history
+        _log_history.clear()
+        try:
+            from gui.log_dialog import get_active_log_dialog
+            dlg = get_active_log_dialog()
+            if dlg:
+                dlg._clear_logs()
+        except Exception:
+            pass
+
+    def index(self, *a, **k):
+        return f"{len(_log_history)}.0"
+
+    def get(self, *a, **k):
+        return "".join(_log_history)
+
+
 class ScriptFileAdapter:
     def __init__(self, key: str):
         self.key = key
@@ -148,20 +220,32 @@ def set_status(msg, color=theme.RED):
 
 
 def log_screen(msg):
-    """线程安全追加运行日志，并同步回显到控制台。"""
+    """线程安全追加运行日志，并同步回显到控制台与独立日志查看器。"""
     if _shutting_down:
         return
+    text = str(msg)
     try:
-        print(msg)
+        print(text)
     except Exception:
         pass
+    _log_history.append(text + "\n")
+    if len(_log_history) > 2000:
+        del _log_history[:500]
     try:
-        def _do():
-            txt_screen_log.insert(tk.END, msg + "\n")
-            txt_screen_log.see(tk.END)
-        root.after(0, _do)
+        from gui.log_dialog import get_active_log_dialog
+        dlg = get_active_log_dialog()
+        if dlg and root is not None:
+            root.after(0, lambda: dlg.append_log(text))
     except Exception:
         pass
+    if txt_screen_log is not None and root is not None:
+        try:
+            def _do():
+                txt_screen_log.insert(tk.END, text + "\n")
+                txt_screen_log.see(tk.END)
+            root.after(0, _do)
+        except Exception:
+            pass
 
 
 def set_volume_meter(db, avg=None, speaking=False, silence_elapsed=None,
@@ -295,7 +379,7 @@ def build_ui():
     global lab_count, lab_danmu_status, lab_auth_status, lab_auth_detail
     global embed_container, txt_danmu, txt_screen_log, txt_pre_meet
     global btn_power, btn_meet, btn_live_start, btn_live_stop, btn_cap
-    global btn_pwd, btn_auth, btn_settings, btn_save, btn_danmu, btn_logout
+    global btn_pwd, btn_auth, btn_settings, btn_logs, btn_save, btn_danmu, btn_logout
     global ent_danmu_url, cmb_doubao_lang
     global volume_canvas, lab_vad_state, _volume_poll_started, _volume_after_id, _shutting_down
     global ent_prod_name, ent_prod_desc, ent_r1min, ent_r1max, ent_cmd1
@@ -304,13 +388,15 @@ def build_ui():
     global btn_open_txt1, btn_open_txt2, btn_open_txt3, lab_txt1_info, lab_txt2_info, lab_txt3_info
     global lab_txt1_preview, lab_txt2_preview, lab_txt3_preview
     global btn_close_notepads, lbl_obs_link
+    global ent_stream_input, cmb_stream_quality, cmb_stream_format, ent_stream_url
+    global chk_auto_obs, var_auto_obs, btn_parse_stream, btn_sync_obs, lab_stream_meta, lab_obs_sync_status
 
     _shutting_down = False
     _volume_poll_started = False
     _volume_after_id = None
     root = tk.Tk()
     root.title("智播豆 · AI 智能直播工作台")
-    root.geometry("1280x800")
+    root.geometry("1280x820")
     root.minsize(1180, 760)
     root.configure(bg=theme.BG)
     theme.configure_ttk(root)
@@ -392,14 +478,95 @@ def build_ui():
                                 command=_open_settings)
     btn_settings.pack(side=tk.RIGHT, padx=3, pady=7)
 
+    def _open_logs():
+        try:
+            from gui.log_dialog import open_log_dialog
+            open_log_dialog(root, get_log_history())
+        except Exception as e:
+            import tkinter.messagebox as mb
+            mb.showerror("错误", f"打开运行日志失败: {e}")
+
+    btn_logs = theme.button(auth_frame, "📜 运行日志", color=theme.SLATE_BTN,
+                            active=theme.SLATE_BTN_HOVER, width=9, font_size=8,
+                            command=_open_logs)
+    btn_logs.pack(side=tk.RIGHT, padx=3, pady=7)
+
     # 预留底栏空间
-    footer = tk.Frame(root, bg=theme.BG_ELEVATED, height=24)
+    footer = tk.Frame(root, bg=theme.BG_ELEVATED, height=22)
     footer.pack(side=tk.BOTTOM, fill=tk.X)
     footer.pack_propagate(False)
     theme.label(footer, "杭州智鑫科技  ·  智播豆 AI 直播管控系统",
-                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.LEFT, padx=16, pady=3)
+                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.LEFT, padx=16, pady=2)
     theme.label(footer, "LOCAL DESKTOP · SECURE SESSION",
-                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.RIGHT, padx=16, pady=3)
+                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.RIGHT, padx=16, pady=2)
+
+    # ---------------- 底部平铺直播状态栏 (平铺全屏最底端) ----------------
+    statusbar = tk.Frame(root, bg=theme.SURFACE, height=36)
+    statusbar.pack(side=tk.BOTTOM, fill=tk.X)
+    statusbar.pack_propagate(False)
+
+    # 左侧：系统运行与弹幕状态
+    lab_sys_status = theme.label(statusbar, "🟢 待机 · 等待启动", fg=theme.GREEN,
+                                 bold=True, font_size=9, anchor="w")
+    lab_sys_status.pack(side=tk.LEFT, padx=(14, 8))
+
+    tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=8)
+
+    lab_danmu_status = theme.label(statusbar, "💬 弹幕采集 · 未启动", muted=True,
+                                   font_size=8, anchor="w")
+    lab_danmu_status.pack(side=tk.LEFT, padx=6)
+
+    tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=8)
+
+    lab_online = theme.label(statusbar, "📶 在线：0 人", fg=theme.CYAN, bold=True, font_size=8)
+    lab_online.pack(side=tk.LEFT, padx=6)
+
+    lab_like = theme.label(statusbar, "👍 点赞：0", fg=theme.PURPLE, bold=True, font_size=8)
+    lab_like.pack(side=tk.LEFT, padx=6)
+
+    lab_gift = theme.label(statusbar, "🎁 礼物：0", fg=theme.AMBER, bold=True, font_size=8)
+    lab_gift.pack(side=tk.LEFT, padx=6)
+
+    tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=8)
+
+    # 链路标签
+    def _status_pill(name, color):
+        pill = theme.pill(statusbar, name, bg=theme.SURFACE_ALT, fg=color, font_size=7, bold=True)
+        pill.pack(side=tk.LEFT, padx=3)
+        return pill
+
+    tag_phone = _status_pill("📱 投屏", theme.AMBER)
+    tag_doubao = _status_pill("🎙️ 豆包", theme.GREEN)
+    tag_ai = _status_pill("🤖 弹幕", theme.CYAN)
+    tag_duck = _status_pill("🔈 闪避", theme.PURPLE)
+
+    # 右侧：OBS 音频链接复制与运行日志快捷按钮
+    btn_bar_logs = theme.button(statusbar, "📜 运行日志", color=theme.SLATE_BTN,
+                                active=theme.SLATE_BTN_HOVER, font_size=8, padx=6, pady=1,
+                                command=_open_logs)
+    btn_bar_logs.pack(side=tk.RIGHT, padx=(4, 12), pady=6)
+
+    tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.RIGHT, fill=tk.Y, padx=6, pady=8)
+
+    obs_audio_port_init = config.load_config().get("obs_audio_port", 8554)
+    lbl_obs_link = theme.label(statusbar, f"OBS音频源: :{obs_audio_port_init}", muted=True, font_size=8)
+    lbl_obs_link.pack(side=tk.RIGHT, padx=4)
+
+    def _copy_obs_link():
+        try:
+            curr_port = config.load_config().get("obs_audio_port", 8554)
+            curr_url = f"http://127.0.0.1:{curr_port}/danmu_audio"
+            root.clipboard_clear()
+            root.clipboard_append(curr_url)
+            btn_copy_obs.config(text="已复制", fg=theme.GREEN)
+            root.after(1500, lambda: btn_copy_obs.config(text="复制", fg=theme.TEXT))
+        except Exception:
+            pass
+
+    btn_copy_obs = theme.button(statusbar, "复制音频源", color=theme.SURFACE_SOFT,
+                                active=theme.BORDER_FOCUS, font_size=7, padx=5, pady=1,
+                                command=_copy_obs_link)
+    btn_copy_obs.pack(side=tk.RIGHT, padx=4)
 
     main_all = tk.Frame(root, bg=theme.BG)
     main_all.pack(fill=tk.BOTH, expand=True, padx=14, pady=(2, 6))
@@ -438,6 +605,15 @@ def build_ui():
         active=theme.SLATE_BTN_HOVER, font_size=8, padx=6, pady=2, command=_open_audio_mix,
     )
     btn_audio_pref.pack(side=tk.RIGHT, padx=(2, 2))
+
+    # 抓屏控制条（移至左侧设备卡片，与画面紧密联动）
+    cap_bar = tk.Frame(device_body, bg=theme.SURFACE, padx=6, pady=4)
+    cap_bar.pack(fill=tk.X, pady=(4, 0))
+    lab_cap_status = theme.label(cap_bar, "抓屏 · 已停止", fg=theme.AMBER, font_size=8, bg=theme.SURFACE)
+    lab_cap_status.pack(side=tk.LEFT)
+    btn_cap = theme.button(cap_bar, "开启抓屏", color=theme.SLATE_BTN,
+                           active=theme.SLATE_BTN_HOVER, width=8, state=tk.DISABLED, font_size=8, pady=1)
+    btn_cap.pack(side=tk.RIGHT)
 
     # ---------------- 右侧主控制台 (ui_right) ----------------
     ui_right = tk.Frame(main_all, bg=theme.BG)
@@ -612,107 +788,283 @@ def build_ui():
         _volume_poll_started = True
         _volume_after_id = root.after(50, _poll_volume_meter)
 
-    # ---------------- 4. 底部三栏（实时弹幕 | 运行日志 | 直播状态） ----------------
-    bottom = tk.Frame(ui_right, bg=theme.BG)
-    bottom.pack(fill=tk.BOTH, expand=True)
-    bottom.grid_columnconfigure(0, weight=3, uniform="bottom")
-    bottom.grid_columnconfigure(1, weight=2, uniform="bottom")
-    bottom.grid_columnconfigure(2, weight=2, uniform="bottom")
-    bottom.grid_rowconfigure(0, weight=1)
+    # ---------------- 4. 兼容适配器初始化 (弹幕与运行日志移出主界面) ----------------
+    txt_danmu = DanmuTextAdapter()
+    txt_screen_log = TextLogAdapter()
 
-    # 4.1 实时弹幕
-    feed_card, feed = theme.card(bottom, "实时弹幕", accent=theme.PRIMARY)
-    feed_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-    txt_danmu = scrolledtext.ScrolledText(feed, width=1, height=1, wrap=tk.WORD)
-    _configure_text(txt_danmu)
-    txt_danmu.pack(fill=tk.BOTH, expand=True)
+    # ---------------- 5. ⚡ 多平台直播流解析 (StreamGet) & OBS 串流联动 ----------------
+    stream_card, stream_body = theme.card(ui_right, "⚡ 多平台直播流解析 (StreamGet) & OBS 串流联动", accent=theme.PRIMARY, pady=6)
+    stream_card.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
-    # 4.2 运行日志
-    log_card, logs = theme.card(bottom, "运行日志", accent=theme.PRIMARY, pady=6)
-    log_card.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
-    log_bar = tk.Frame(logs, bg=theme.SURFACE)
-    log_bar.pack(fill=tk.X, pady=(0, 4))
-    lab_cap_status = theme.label(log_bar, "抓屏 · 已停止", fg=theme.AMBER, font_size=8)
-    lab_cap_status.pack(side=tk.LEFT)
-    btn_cap = theme.button(log_bar, "开启抓屏", color=theme.SLATE_BTN,
-                           active=theme.SLATE_BTN_HOVER, width=8, state=tk.DISABLED, font_size=8, pady=2)
-    btn_cap.pack(side=tk.RIGHT)
-    txt_screen_log = scrolledtext.ScrolledText(logs, width=1, height=1, wrap=tk.WORD)
-    _configure_text(txt_screen_log)
-    txt_screen_log.pack(fill=tk.BOTH, expand=True)
+    # 5.1 输入行：直播流地址输入 + 一键复制上面直播间 + 解析按钮 + 清空
+    input_row = tk.Frame(stream_body, bg=theme.SURFACE)
+    input_row.pack(fill=tk.X, pady=(0, 5))
 
-    # 4.3 直播状态立体监视大屏（彻底激活原 200px 纯黑死区）
-    stat_card, stats = theme.card(bottom, "直播状态", accent=theme.PRIMARY, pady=6)
-    stat_card.grid(row=0, column=2, sticky="nsew")
+    theme.label(input_row, "直播流地址", muted=True, font_size=9).pack(side=tk.LEFT, padx=(0, 6))
+    ent_stream_input = theme.entry(input_row)
+    ent_stream_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
 
-    status_line = tk.Frame(stats, bg=theme.SURFACE)
-    status_line.pack(fill=tk.X, pady=(0, 5))
-    lab_sys_status = theme.label(status_line, "待机 · 等待启动", fg=theme.GREEN,
-                                 bold=True, font_size=9, anchor="w")
-    lab_sys_status.pack(side=tk.LEFT)
-    lab_danmu_status = theme.label(status_line, "弹幕采集 · 未启动", muted=True,
-                                   font_size=8, anchor="e")
-    lab_danmu_status.pack(side=tk.RIGHT)
+    def _sync_from_danmu_url():
+        u = ent_danmu_url.get().strip()
+        if u:
+            ent_stream_input.delete(0, tk.END)
+            ent_stream_input.insert(0, u)
+        else:
+            messagebox.showinfo("提示", "当前产品配置中的直播间地址为空，请先在上方输入或直接在此输入链接", parent=root)
 
-    # 核心指标三联卡
-    metric_strip = tk.Frame(stats, bg=theme.SURFACE)
-    metric_strip.pack(fill=tk.X, pady=(0, 6))
+    btn_link_danmu = theme.button(
+        input_row, "🔗 同直播间", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
+        font_size=8, padx=6, pady=2, command=_sync_from_danmu_url,
+    )
+    btn_link_danmu.pack(side=tk.LEFT, padx=(0, 6))
 
-    def _metric(title, initial, color):
-        cell = tk.Frame(metric_strip, bg=theme.SURFACE_ALT)
-        cell.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
-        theme.label(cell, title, muted=True, font_size=7, bg=theme.SURFACE_ALT).pack(pady=(4, 0))
-        value = theme.label(cell, initial, fg=color, bold=True, font_size=11, bg=theme.SURFACE_ALT)
-        value.pack(pady=(0, 4))
-        return value
+    btn_parse_stream = theme.button(
+        input_row, "🔍 解析流地址", color=theme.PRIMARY, active=theme.PRIMARY_HOVER,
+        width=11, font_size=9,
+    )
+    btn_parse_stream.pack(side=tk.LEFT, padx=(0, 6))
 
-    lab_online = _metric("实时在线", "0 人", theme.CYAN)
-    lab_like = _metric("累计点赞", "0", theme.PURPLE)
-    lab_gift = _metric("礼物互动", "0", theme.AMBER)
+    def _clear_stream_fields():
+        ent_stream_input.delete(0, tk.END)
+        ent_stream_url.delete(0, tk.END)
+        lab_stream_meta.config(text="未解析 · 支持解析国内外 40+ 平台（抖音/快手/B站/虎牙/斗鱼/小红书/TikTok/Twitch/YouTube等）", fg=theme.TEXT_MUTED)
+        lab_obs_sync_status.config(text="已就绪", fg=theme.TEXT_MUTED)
 
-    # 系统链路监视面板（展示核心四大链路状态，消除空洞）
-    link_frame = tk.Frame(stats, bg=theme.SURFACE_ALT, padx=8, pady=5)
-    link_frame.pack(fill=tk.X, pady=(0, 6))
-    theme.label(link_frame, "系统链路监视", bold=True, font_size=8, fg=theme.TEXT_SOFT, bg=theme.SURFACE_ALT).pack(fill=tk.X, pady=(0, 3))
+    btn_clear_stream = theme.button(
+        input_row, "🧹 清空", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
+        width=6, font_size=8, command=_clear_stream_fields,
+    )
+    btn_clear_stream.pack(side=tk.LEFT)
 
-    def _link_row(parent, icon, name, initial_tag, tag_color):
-        row_f = tk.Frame(parent, bg=theme.SURFACE_ALT)
-        row_f.pack(fill=tk.X, pady=1)
-        theme.label(row_f, f"{icon} {name}", muted=True, font_size=8, bg=theme.SURFACE_ALT).pack(side=tk.LEFT)
-        tag = theme.pill(row_f, initial_tag, bg=theme.SURFACE_SOFT, fg=tag_color, font_size=7, bold=True)
-        tag.pack(side=tk.RIGHT)
-        return tag
+    # 5.2 平台与主播信息条
+    meta_bar = tk.Frame(stream_body, bg=theme.SURFACE_ALT, padx=8, pady=5)
+    meta_bar.pack(fill=tk.X, pady=(0, 5))
+    lab_stream_meta = theme.label(
+        meta_bar, "未解析 · 支持国内外 40+ 平台（抖音/快手/B站/虎牙/斗鱼/小红书/TikTok/Twitch/YouTube等）",
+        muted=True, font_size=8, bg=theme.SURFACE_ALT, anchor="w",
+    )
+    lab_stream_meta.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    _link_row(link_frame, "📱", "手机投屏链路", "等待连接", theme.AMBER)
-    _link_row(link_frame, "🎙️", "豆包对话交互", "前台就绪", theme.GREEN)
-    _link_row(link_frame, "🤖", "AI 弹幕回复", "智能过滤", theme.CYAN)
-    _link_row(link_frame, "🔈", "音频智能避让", "WASAPI 闪避", theme.PURPLE)
+    # 5.3 清晰度、格式与流地址展示行
+    out_row = tk.Frame(stream_body, bg=theme.SURFACE)
+    out_row.pack(fill=tk.X, pady=(0, 5))
 
-    # OBS 音频桥接卡片（提供推流配置提示与一键复制功能）
-    obs_box = tk.Frame(stats, bg=theme.SURFACE_ALT, padx=8, pady=5)
-    obs_box.pack(fill=tk.X)
-    theme.label(obs_box, "OBS 浏览器音频源", bold=True, font_size=8, fg=theme.TEXT_SOFT, bg=theme.SURFACE_ALT).pack(fill=tk.X, pady=(0, 2))
-    obs_row = tk.Frame(obs_box, bg=theme.SURFACE_ALT)
-    obs_row.pack(fill=tk.X)
-    obs_port = config.load_config().get("obs_audio_port", 8554)
-    lbl_obs_link = theme.label(obs_row, f"http://127.0.0.1:{obs_port}/danmu_audio", fg=theme.CYAN, font_size=8, bg=theme.SURFACE_ALT)
-    lbl_obs_link.pack(side=tk.LEFT)
+    theme.label(out_row, "清晰度", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 4))
+    cmb_stream_quality = ttk.Combobox(out_row, style="Zhibodou.TCombobox", width=10, state="readonly")
+    cmb_stream_quality.pack(side=tk.LEFT, padx=(0, 8))
 
-    def _copy_obs_link():
+    theme.label(out_row, "格式", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 4))
+    cmb_stream_format = ttk.Combobox(out_row, style="Zhibodou.TCombobox", width=6, state="readonly")
+    cmb_stream_format.pack(side=tk.LEFT, padx=(0, 8))
+
+    theme.label(out_row, "播放流", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 4))
+    ent_stream_url = theme.entry(out_row)
+    ent_stream_url.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+
+    def _copy_parsed_stream_url():
+        u = ent_stream_url.get().strip()
+        if not u:
+            messagebox.showinfo("提示", "当前没有可复制的流地址，请先解析直播间", parent=root)
+            return
+        root.clipboard_clear()
+        root.clipboard_append(u)
+        btn_copy_stream.config(text="已复制", fg=theme.GREEN)
+        root.after(1500, lambda: btn_copy_stream.config(text="📋 复制", fg=theme.TEXT))
+
+    btn_copy_stream = theme.button(
+        out_row, "📋 复制", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
+        font_size=8, padx=6, pady=2, command=_copy_parsed_stream_url,
+    )
+    btn_copy_stream.pack(side=tk.LEFT, padx=(0, 4))
+
+    def _play_stream_url():
+        u = ent_stream_url.get().strip()
+        if not u:
+            messagebox.showinfo("提示", "当前没有可播放的流地址", parent=root)
+            return
         try:
-            curr_port = config.load_config().get("obs_audio_port", 8554)
-            curr_url = f"http://127.0.0.1:{curr_port}/danmu_audio"
-            root.clipboard_clear()
-            root.clipboard_append(curr_url)
-            lbl_obs_link.config(text=curr_url)
-            btn_copy_obs.config(text="已复制", fg=theme.GREEN)
-            root.after(1500, lambda: btn_copy_obs.config(text="复制", fg=theme.TEXT))
-        except Exception:
-            pass
+            import webbrowser
+            webbrowser.open(u)
+        except Exception as e:
+            messagebox.showerror("错误", f"调起播放失败: {e}", parent=root)
 
-    btn_copy_obs = theme.button(obs_row, "复制", color=theme.SURFACE_SOFT,
-                                active=theme.BORDER_FOCUS, font_size=7, padx=5, pady=0, command=_copy_obs_link)
-    btn_copy_obs.pack(side=tk.RIGHT)
+    btn_play_stream = theme.button(
+        out_row, "▶ 播放", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
+        font_size=8, padx=6, pady=2, command=_play_stream_url,
+    )
+    btn_play_stream.pack(side=tk.LEFT)
+
+    # 5.4 OBS 自动联动控制行
+    obs_ctrl_row = tk.Frame(stream_body, bg=theme.SURFACE)
+    obs_ctrl_row.pack(fill=tk.X, pady=(2, 0))
+
+    var_auto_obs = tk.BooleanVar(value=bool(config.load_config().get("auto_sync_obs_stream", False)))
+    chk_auto_obs = tk.Checkbutton(
+        obs_ctrl_row, text="解析后自动添加/同步流媒体源到 OBS",
+        variable=var_auto_obs,
+        bg=theme.SURFACE, fg=theme.TEXT_SOFT, selectcolor=theme.SURFACE_ALT,
+        activebackground=theme.SURFACE, activeforeground=theme.TEXT,
+        font=("Segoe UI", 9),
+    )
+    chk_auto_obs.pack(side=tk.LEFT, padx=(0, 10))
+
+    obs_ws_port_init = config.load_config().get("obs_websocket_port", 5544)
+    theme.label(obs_ctrl_row, f"OBS WS 端口: {obs_ws_port_init}", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 10))
+
+    btn_sync_obs = theme.button(
+        obs_ctrl_row, "🔄 立即同步至 OBS 场景", color=theme.TEAL, active=theme.CYAN,
+        font_size=8, padx=8, pady=2,
+    )
+    btn_sync_obs.pack(side=tk.LEFT, padx=(0, 10))
+
+    lab_obs_sync_status = theme.label(
+        obs_ctrl_row, "已就绪 · 勾选后解析自动下发", muted=True, font_size=8,
+    )
+    lab_obs_sync_status.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    # ---------------- 业务交互回调与事件绑定 ----------------
+    _parsed_stream_cache: dict = {}
+
+    def _on_stream_option_change(*args):
+        nonlocal _parsed_stream_cache
+        if not _parsed_stream_cache:
+            return
+        streams = _parsed_stream_cache.get("streams", {})
+        q_label = cmb_stream_quality.get()
+        q_code = "OD"
+        from broadcast.stream_parser import QUALITY_NAMES
+        for code, label in QUALITY_NAMES.items():
+            if label == q_label or code == q_label:
+                q_code = code
+                break
+
+        fmt = cmb_stream_format.get().lower()  # "flv" 或 "m3u8"
+        stream_dict = streams.get(q_code, {})
+        url = stream_dict.get(fmt) or stream_dict.get("flv") or stream_dict.get("m3u8") or ""
+        ent_stream_url.delete(0, tk.END)
+        ent_stream_url.insert(0, url)
+
+    cmb_stream_quality.bind("<<ComboboxSelected>>", _on_stream_option_change)
+    cmb_stream_format.bind("<<ComboboxSelected>>", _on_stream_option_change)
+
+    def _do_push_to_obs_worker(stream_url):
+        from broadcast.obs_websocket import check_obs_websocket_port, push_stream_to_obs
+        cfg = config.load_config()
+        obs_port = int(cfg.get("obs_websocket_port", 5544))
+        obs_pwd = str(cfg.get("obs_websocket_password", ""))
+
+        # 检查 5544 端口是否开放
+        if not check_obs_websocket_port(port=obs_port):
+            def _prompt():
+                lab_obs_sync_status.config(text=f"⚠️ 未检测到 OBS (端口 {obs_port})，请启动 OBS 并开启服务", fg=theme.AMBER)
+                messagebox.showwarning(
+                    "OBS WebSocket 未连接",
+                    f"未检测到 OBS WebSocket 服务 (端口 {obs_port})！\n\n"
+                    f"请按以下步骤开启：\n"
+                    f"1. 启动 OBS Studio 客户端；\n"
+                    f"2. 点击顶部菜单栏【工具】 -> 【WebSocket 服务器设置】；\n"
+                    f"3. 勾选【启用 WebSocket 服务器】；\n"
+                    f"4. 确认服务器端口为 {obs_port}（无需设置密码或在设置中配置密码）；\n"
+                    f"5. 点击【应用】后重新同步。",
+                    parent=root,
+                )
+            root.after(0, _prompt)
+            return
+
+        def _set_syncing():
+            lab_obs_sync_status.config(text=f"正在连接 OBS (端口 {obs_port}) 并下发网络流...", fg=theme.CYAN)
+        root.after(0, _set_syncing)
+
+        res = push_stream_to_obs(stream_url, port=obs_port, password=obs_pwd)
+
+        def _done():
+            if res.get("success"):
+                lab_obs_sync_status.config(text=res.get("message"), fg=theme.GREEN)
+                messagebox.showinfo("OBS 联动成功", res.get("message"), parent=root)
+            else:
+                lab_obs_sync_status.config(text=f"❌ 同步失败: {res.get('message')}", fg=theme.RED)
+                messagebox.showerror("OBS 同步失败", res.get("message"), parent=root)
+        root.after(0, _done)
+
+    def _on_sync_obs_clicked():
+        u = ent_stream_url.get().strip()
+        if not u:
+            messagebox.showwarning("提示", "请先解析直播间获取有效的流媒体播放地址！", parent=root)
+            return
+        threading.Thread(target=_do_push_to_obs_worker, args=(u,), daemon=True).start()
+
+    btn_sync_obs.config(command=_on_sync_obs_clicked)
+
+    def _on_parse_stream_clicked():
+        url = ent_stream_input.get().strip()
+        if not url:
+            messagebox.showwarning("提示", "请输入要解析的直播间网址或分享链接！", parent=root)
+            return
+
+        btn_parse_stream.config(state=tk.DISABLED)
+        lab_stream_meta.config(text="🔍 正在调取 StreamGet 引擎解析直播间，请稍候...", fg=theme.CYAN)
+        lab_obs_sync_status.config(text="等待解析完成...", fg=theme.TEXT_MUTED)
+
+        def _worker():
+            from broadcast.stream_parser import parse_stream, QUALITY_NAMES
+            res = parse_stream(url)
+
+            def _update_ui():
+                nonlocal _parsed_stream_cache
+                btn_parse_stream.config(state=tk.NORMAL)
+                if not res.get("success"):
+                    lab_stream_meta.config(text=f"❌ 解析失败: {res.get('message')}", fg=theme.RED)
+                    messagebox.showerror("解析失败", res.get("message"), parent=root)
+                    return
+
+                _parsed_stream_cache = res
+                plat = res.get("platform", "直播间")
+                anchor = res.get("anchor_name", "主播")
+                title = res.get("title", "")
+                is_live = res.get("is_live", False)
+                live_badge = "🟢 直播中" if is_live else "🔴 未开播"
+
+                lab_stream_meta.config(
+                    text=f"【{plat}】 {live_badge} · 主播：{anchor} · 标题：{title}",
+                    fg=theme.GREEN if is_live else theme.AMBER,
+                )
+
+                # 填充清晰度与格式下拉框
+                avail_q = res.get("available_qualities", [])
+                q_display = [QUALITY_NAMES.get(q, q) for q in avail_q]
+                cmb_stream_quality["values"] = q_display
+                if q_display:
+                    cmb_stream_quality.current(0)
+
+                avail_fmt = res.get("available_formats", ["FLV", "M3U8"])
+                cmb_stream_format["values"] = avail_fmt
+                if avail_fmt:
+                    cmb_stream_format.current(0)
+
+                # 填入默认 URL
+                def_url = res.get("default_url", "")
+                ent_stream_url.delete(0, tk.END)
+                ent_stream_url.insert(0, def_url)
+
+                # 保存到配置
+                try:
+                    config.save_config({
+                        "streamget_url": url,
+                        "auto_sync_obs_stream": var_auto_obs.get(),
+                    })
+                except Exception:
+                    pass
+
+                # 若开启了自动同步至 OBS
+                if var_auto_obs.get() and def_url:
+                    threading.Thread(target=_do_push_to_obs_worker, args=(def_url,), daemon=True).start()
+
+            root.after(0, _update_ui)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    btn_parse_stream.config(command=_on_parse_stream_clicked)
+
 
     # ---------------- 业务配置回填 ----------------
     cfg_load = config.load_config()
@@ -734,6 +1086,13 @@ def build_ui():
     ent_r2max.insert(0, cfg_load["r2_max"])
     ent_r3min.insert(0, cfg_load["r3_min"])
     ent_r3max.insert(0, cfg_load["r3_max"])
+
+    _saved_streamget_url = str(cfg_load.get("streamget_url") or "")
+    if _saved_streamget_url and ent_stream_input is not None:
+        ent_stream_input.insert(0, _saved_streamget_url)
+    elif danmu_url and ent_stream_input is not None:
+        ent_stream_input.insert(0, danmu_url)
+
     refresh_script_labels()
 
     # AI 弹幕回复硬件自适应探测

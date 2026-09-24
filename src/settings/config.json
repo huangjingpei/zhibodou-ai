@@ -47,5 +47,9 @@
   "vad_calibration_wait_sec": 6.0,
   "scrcpy_audio_output_device": "CABLE Input (VB-Audio Virtual Cable)",
   "audio_duck_ratio": 0.25,
-  "obs_audio_port": 8554
+  "obs_audio_port": 8554,
+  "obs_websocket_port": 5544,
+  "obs_websocket_password": "",
+  "auto_sync_obs_stream": false,
+  "streamget_url": ""
 }
