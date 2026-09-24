@@ -43,12 +43,62 @@ PURPLE = "#A855F7"
 SLATE_BTN = "#223046"
 SLATE_BTN_HOVER = "#2D3E59"
 
+# ---------------- 字体系统规范体系 (Typography System) ----------------
+_CN_FONT_CANDIDATES = (
+    "Microsoft YaHei UI",   # 首选：微软专为 Windows UI 优化版本，行高紧凑、基线对齐佳
+    "微软雅黑",
+    "Microsoft YaHei",
+    "PingFang SC",          # macOS
+    "SimHei",
+    "Segoe UI",
+    "System",
+)
+_cn_font_cache: str | None = None
+
+
+def get_ui_font_family() -> str:
+    """自动探测系统可用的最佳 UI 中文字体族（带缓存）。"""
+    global _cn_font_cache
+    if _cn_font_cache:
+        return _cn_font_cache
+    try:
+        import tkinter.font as tkfont
+        avail = set(tkfont.families())
+        for name in _CN_FONT_CANDIDATES:
+            if name in avail:
+                _cn_font_cache = name
+                return name
+    except Exception:
+        pass
+    _cn_font_cache = "Microsoft YaHei UI"
+    return _cn_font_cache
+
+
 FONT_UI = "Microsoft YaHei UI"
 FONT_EN = "Segoe UI"
+FONT_CODE = "Consolas"
+
+# 统一字号阶梯规范 (Typography Scale)
+FS_DISPLAY = 13     # 顶栏主品牌标题 / 核心关键数字
+FS_TITLE = 12       # 弹窗主标题
+FS_CARD_TITLE = 10  # 模块卡片标题 / 分组大标题
+FS_BODY = 9         # 主界面正文字号 (输入框、下拉框、标准表单标签、主按钮)
+FS_CAPTION = 8      # 辅助提示说明、状态胶囊徽章、次级元数据
 
 
-def font(size: int, weight: str = "normal") -> tuple[str, int, str]:
-    return FONT_UI, size, weight
+def font(size: int = FS_BODY, weight: str = "normal") -> tuple[str, int, str]:
+    """统一中西文 UI 字体元组。"""
+    return get_ui_font_family(), size, weight
+
+
+def font_en(size: int = FS_BODY, weight: str = "normal") -> tuple[str, int, str]:
+    """英文/数字专用字体元组（适合版本号、代码代号等）。"""
+    return FONT_EN, size, weight
+
+
+def font_code(size: int = FS_BODY, weight: str = "normal") -> tuple[str, int, str]:
+    """等宽代码/日志字体元组。"""
+    return FONT_CODE, size, weight
 
 
 def mix_hex(start: str, end: str, t: float) -> str:
@@ -89,7 +139,7 @@ def configure_ttk(root: tk.Misc) -> ttk.Style:
         lightcolor=BORDER,
         darkcolor=BORDER,
         padding=(8, 4),
-        font=font(9),
+        font=font(FS_BODY),
     )
     style.map(
         "Zhibodou.TCombobox",
@@ -103,6 +153,7 @@ def configure_ttk(root: tk.Misc) -> ttk.Style:
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", PRIMARY)
     root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+    root.option_add("*TCombobox*Listbox.font", font(FS_BODY))
     return style
 
 
@@ -120,7 +171,7 @@ def card(parent: tk.Misc, title: str, *, accent: str = PRIMARY,
     tk.Frame(header, bg=accent, width=3).pack(side=tk.LEFT, fill=tk.Y, pady=5)
     tk.Label(
         header, text=title, bg=SURFACE, fg=TEXT,
-        font=font(10, "bold"), anchor="w",
+        font=font(FS_CARD_TITLE, "bold"), anchor="w",
     ).pack(side=tk.LEFT, padx=(7, 0))
 
     body = tk.Frame(shell, bg=SURFACE)
@@ -131,7 +182,7 @@ def card(parent: tk.Misc, title: str, *, accent: str = PRIMARY,
 
 
 def label(parent: tk.Misc, text: str, *, muted: bool = False,
-          font_size: int = 9, bold: bool = False, **kwargs) -> tk.Label:
+          font_size: int = FS_BODY, bold: bool = False, **kwargs) -> tk.Label:
     return tk.Label(
         parent, text=text, bg=kwargs.pop("bg", SURFACE),
         fg=kwargs.pop("fg", TEXT_MUTED if muted else TEXT_SOFT),
@@ -141,7 +192,7 @@ def label(parent: tk.Misc, text: str, *, muted: bool = False,
 
 
 def pill(parent: tk.Misc, text: str, *, bg: str = SURFACE_SOFT, fg: str = TEXT_MUTED,
-         font_size: int = 8, bold: bool = False, padx: int = 6, pady: int = 1) -> tk.Label:
+         font_size: int = FS_CAPTION, bold: bool = True, padx: int = 7, pady: int = 2) -> tk.Label:
     """紧凑状态胶囊徽章"""
     return tk.Label(
         parent, text=text, bg=bg, fg=fg,
@@ -150,13 +201,13 @@ def pill(parent: tk.Misc, text: str, *, bg: str = SURFACE_SOFT, fg: str = TEXT_M
     )
 
 
-def entry(parent: tk.Misc, *, width: int | None = None) -> tk.Entry:
+def entry(parent: tk.Misc, *, width: int | None = None, font_size: int = FS_BODY) -> tk.Entry:
     widget = tk.Entry(
         parent, bg=SURFACE_ALT, fg=TEXT, insertbackground=CYAN,
         selectbackground=PRIMARY, selectforeground="#FFFFFF",
         relief=tk.FLAT, bd=0, highlightthickness=1,
         highlightbackground=BORDER, highlightcolor=BORDER_FOCUS,
-        font=font(9),
+        font=font(font_size),
     )
     if width is not None:
         widget.configure(width=width)
@@ -165,8 +216,8 @@ def entry(parent: tk.Misc, *, width: int | None = None) -> tk.Entry:
 
 def button(parent: tk.Misc, text: str, *, color: str = PRIMARY,
            active: str | None = None, fg: str = "#FFFFFF", width: int | None = None,
-           command=None, state=tk.NORMAL, font_size: int = 9, bold: bool = True,
-           padx: int = 10, pady: int = 4) -> tk.Button:
+           command=None, state=tk.NORMAL, font_size: int = FS_BODY, bold: bool = True,
+           padx: int = 8, pady: int = 3) -> tk.Button:
     options = dict(
         text=text, command=command, state=state,
         bg=color, activebackground=active or color,
@@ -181,13 +232,13 @@ def button(parent: tk.Misc, text: str, *, color: str = PRIMARY,
     return tk.Button(parent, **options)
 
 
-def text_area(parent: tk.Misc, text_widget_cls, **kwargs):
+def text_area(parent: tk.Misc, text_widget_cls, font_size: int = FS_BODY, **kwargs):
     return text_widget_cls(
         parent,
         bg=SURFACE_ALT, fg=TEXT_SOFT, insertbackground=CYAN,
         selectbackground=PRIMARY, selectforeground="#FFFFFF",
         relief=tk.FLAT, bd=0, highlightthickness=1,
         highlightbackground=BORDER, highlightcolor=BORDER_FOCUS,
-        font=font(9), padx=8, pady=6,
+        font=font(font_size), padx=8, pady=6,
         **kwargs,
     )

@@ -182,8 +182,8 @@ class SettingsDialog:
 
         row_t = tk.Frame(title_box, bg=theme.BG_ELEVATED)
         row_t.pack(anchor="w")
-        theme.label(row_t, "⚙️ 系统设置中心", font_size=12, bold=True, fg=theme.TEXT).pack(side=tk.LEFT)
-        theme.pill(row_t, f"v{APP_VERSION}", bg=theme.PRIMARY_MUTED, fg=theme.CYAN, font_size=8).pack(
+        theme.label(row_t, "⚙️ 系统设置中心", font_size=theme.FS_TITLE, bold=True, fg=theme.TEXT).pack(side=tk.LEFT)
+        theme.pill(row_t, f"v{APP_VERSION}", bg=theme.PRIMARY_MUTED, fg=theme.CYAN, font_size=theme.FS_CAPTION).pack(
             side=tk.LEFT, padx=(8, 0)
         )
 
@@ -191,7 +191,7 @@ class SettingsDialog:
             title_box,
             "AI 智能参数 · PDK 许可证 · 声音闪避与 OBS 推流 · 系统版本维护",
             muted=True,
-            font_size=8,
+            font_size=theme.FS_CAPTION,
             anchor="w",
         ).pack(anchor="w", pady=(2, 0))
 
@@ -210,20 +210,20 @@ class SettingsDialog:
 
         # 状态小提示
         self.lab_footer_status = theme.label(
-            footer, "修改参数后请点击「保存配置」使改动即时生效", muted=True, font_size=8
+            footer, "修改参数后请点击「保存配置」使改动即时生效", muted=True, font_size=theme.FS_BODY
         )
         self.lab_footer_status.pack(side=tk.LEFT, padx=16, pady=10)
 
         # 按钮组
         btn_close = theme.button(
             footer, "关闭", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
-            width=7, font_size=8, command=self._on_close,
+            width=7, font_size=theme.FS_BODY, command=self._on_close,
         )
         btn_close.pack(side=tk.RIGHT, padx=(6, 16), pady=8)
 
         btn_save = theme.button(
             footer, "💾 保存配置", color=theme.PRIMARY, active=theme.PRIMARY_HOVER,
-            width=11, font_size=8, command=self._save_settings,
+            width=11, font_size=theme.FS_BODY, command=self._save_settings,
         )
         btn_save.pack(side=tk.RIGHT, padx=3, pady=8)
 
@@ -241,7 +241,7 @@ class SettingsDialog:
         bar_title = tk.Frame(sidebar, bg=theme.SURFACE_ALT, height=28)
         bar_title.pack(fill=tk.X)
         bar_title.pack_propagate(False)
-        theme.label(bar_title, "导航目录", muted=True, font_size=8, bold=True).pack(
+        theme.label(bar_title, "导航目录", muted=True, font_size=theme.FS_CAPTION, bold=True).pack(
             side=tk.LEFT, padx=12, pady=4
         )
 
@@ -297,14 +297,14 @@ class SettingsDialog:
             lbl_icon.pack(side=tk.LEFT)
             lbl_title = tk.Label(
                 row_title, text=title, bg=theme.SURFACE, fg=theme.TEXT_SOFT,
-                font=theme.font(9, "bold"), anchor="w", cursor="hand2",
+                font=theme.font(theme.FS_BODY, "bold"), anchor="w", cursor="hand2",
             )
             lbl_title.pack(side=tk.LEFT, padx=(6, 0))
 
             # 副标题行
             lbl_sub = tk.Label(
                 content, text=subtitle, bg=theme.SURFACE, fg=theme.TEXT_FAINT,
-                font=theme.font(8), anchor="w", cursor="hand2",
+                font=theme.font(theme.FS_CAPTION), anchor="w", cursor="hand2",
             )
             lbl_sub.pack(fill=tk.X, padx=(0, 0), pady=(2, 0))
 
@@ -409,7 +409,7 @@ class SettingsDialog:
         # API Key
         row_k = tk.Frame(body1, bg=theme.SURFACE)
         row_k.pack(fill=tk.X, pady=4)
-        theme.label(row_k, "API 密钥 (API Key):", font_size=8, bold=True).pack(side=tk.LEFT)
+        theme.label(row_k, "API 密钥 (API Key):", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
         self.ent_deepseek_key = theme.entry(row_k, width=34)
         self.ent_deepseek_key.insert(0, self.var_deepseek_key.get())
         self.ent_deepseek_key.configure(show="*")
@@ -423,25 +423,25 @@ class SettingsDialog:
 
         btn_eye = theme.button(
             row_k, "👁️ 显示", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
-            font_size=8, padx=6, pady=2, command=_toggle_key,
+            font_size=theme.FS_CAPTION, padx=6, pady=2, command=_toggle_key,
         )
         btn_eye.pack(side=tk.LEFT)
 
         # Base URL
         row_b = tk.Frame(body1, bg=theme.SURFACE)
         row_b.pack(fill=tk.X, pady=4)
-        theme.label(row_b, "服务地址 (Base URL):", font_size=8, bold=True).pack(side=tk.LEFT)
+        theme.label(row_b, "服务地址 (Base URL):", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
         self.ent_deepseek_base = theme.entry(row_b, width=34)
         self.ent_deepseek_base.insert(0, self.var_deepseek_base.get())
         self.ent_deepseek_base.pack(side=tk.LEFT, padx=8)
-        theme.label(row_b, "云端 API（如 DeepSeek）或本地 Ollama: http://localhost:11434/v1", muted=True, font_size=8).pack(
+        theme.label(row_b, "云端 API（如 DeepSeek）或本地 Ollama: http://localhost:11434/v1", muted=True, font_size=theme.FS_CAPTION).pack(
             side=tk.LEFT
         )
 
         # Model Choice
         row_m = tk.Frame(body1, bg=theme.SURFACE)
         row_m.pack(fill=tk.X, pady=4)
-        theme.label(row_m, "模型标识 (Model):", font_size=8, bold=True).pack(side=tk.LEFT)
+        theme.label(row_m, "模型标识 (Model):", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
         self.cmb_model = ttk.Combobox(
             row_m,
             textvariable=self.var_deepseek_model,
@@ -450,7 +450,7 @@ class SettingsDialog:
             width=22,
         )
         self.cmb_model.pack(side=tk.LEFT, padx=8)
-        theme.label(row_m, "云端模型或本地 Ollama 量化模型标识", muted=True, font_size=8).pack(side=tk.LEFT)
+        theme.label(row_m, "云端模型或本地 Ollama 量化模型标识", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT)
 
         # Card 2: 弹幕采集与 AI 回复设置
         from danma.hardware import ALL_MODE_DISPLAYS
@@ -469,7 +469,7 @@ class SettingsDialog:
             selectcolor=theme.BG_ELEVATED,
             activebackground=theme.SURFACE,
             activeforeground=theme.CYAN,
-            font=theme.font(8, "bold"),
+            font=theme.font(theme.FS_BODY, "bold"),
             relief=tk.FLAT,
             bd=0,
             highlightthickness=0,
@@ -479,7 +479,7 @@ class SettingsDialog:
         # 2. 弹幕回复驱动模式 (Hardware Mode)
         row_dm = tk.Frame(body_danmu, bg=theme.SURFACE)
         row_dm.pack(fill=tk.X, pady=4)
-        theme.label(row_dm, "弹幕回复模式:", font_size=8, bold=True).pack(side=tk.LEFT)
+        theme.label(row_dm, "弹幕回复模式:", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
         self.cmb_danmu_mode = ttk.Combobox(
             row_dm,
             textvariable=self.var_danmu_mode,
@@ -489,7 +489,7 @@ class SettingsDialog:
             state="readonly",
         )
         self.cmb_danmu_mode.pack(side=tk.LEFT, padx=8)
-        theme.label(row_dm, "根据本机显卡自适应推荐语音合成驱动", muted=True, font_size=8).pack(side=tk.LEFT)
+        theme.label(row_dm, "根据本机显卡自适应推荐语音合成驱动", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT)
 
         # 3. 仅统计指标模式 (Checkbox)
         row_mo = tk.Frame(body_danmu, bg=theme.SURFACE)
@@ -503,13 +503,13 @@ class SettingsDialog:
             selectcolor=theme.BG_ELEVATED,
             activebackground=theme.SURFACE,
             activeforeground=theme.CYAN,
-            font=theme.font(8),
+            font=theme.font(theme.FS_BODY),
             relief=tk.FLAT,
             bd=0,
             highlightthickness=0,
         )
         chk_metrics.pack(side=tk.LEFT)
-        theme.label(row_mo, "（勾选后仅统计实时数据，不下发弹幕文本，降低性能开销）", muted=True, font_size=8).pack(side=tk.LEFT, padx=(4, 0))
+        theme.label(row_mo, "（勾选后仅统计实时数据，不下发弹幕文本，降低性能开销）", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT, padx=(4, 0))
 
         # Card 3: 豆包主播提示词模板与硬约束
         card3, body3 = theme.card(container, "豆包主播提示词模板与硬约束", accent=theme.CYAN)
@@ -519,7 +519,7 @@ class SettingsDialog:
             body3,
             "下发给豆包的主播口播硬约束（规范仅输出纯正直播带货话术，杜绝任何格式前缀、解释与客套收尾）：",
             muted=True,
-            font_size=8,
+            font_size=theme.FS_CAPTION,
             anchor="w",
         ).pack(fill=tk.X, pady=(0, 6))
 
@@ -539,7 +539,7 @@ class SettingsDialog:
 
         btn_reset = theme.button(
             row_p_btn, "恢复默认提示词模板", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
-            font_size=8, command=_reset_prompt,
+            font_size=theme.FS_CAPTION, padx=8, pady=2, command=_reset_prompt,
         )
         btn_reset.pack(side=tk.RIGHT)
 
@@ -558,18 +558,18 @@ class SettingsDialog:
         top_status.pack(fill=tk.X, pady=(2, 12), padx=2)
 
         self.lab_lic_badge = theme.pill(
-            top_status, "● 检测中...", bg=theme.SURFACE_SOFT, fg=theme.TEXT_MUTED, font_size=9, bold=True
+            top_status, "● 检测中...", bg=theme.SURFACE_SOFT, fg=theme.TEXT_MUTED, font_size=theme.FS_CAPTION, bold=True
         )
         self.lab_lic_badge.pack(side=tk.LEFT, padx=10, pady=8)
 
         self.lab_lic_summary = theme.label(
-            top_status, "正在读取 PDK 安全会话状态...", muted=True, font_size=8, bg=theme.SURFACE_ALT
+            top_status, "正在读取 PDK 安全会话状态...", muted=True, font_size=theme.FS_BODY, bg=theme.SURFACE_ALT
         )
         self.lab_lic_summary.pack(side=tk.LEFT, padx=4)
 
         btn_refresh = theme.button(
             top_status, "🔄 刷新授权", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
-            font_size=8, padx=8, pady=3, command=self._refresh_license_display,
+            font_size=theme.FS_CAPTION, padx=8, pady=3, command=self._refresh_license_display,
         )
         btn_refresh.pack(side=tk.RIGHT, padx=10, pady=6)
 
@@ -590,10 +590,10 @@ class SettingsDialog:
         for idx, (label_title, key) in enumerate(items):
             row_f = tk.Frame(grid, bg=theme.SURFACE)
             row_f.pack(fill=tk.X, pady=5)
-            theme.label(row_f, f"{label_title}：", font_size=8, bold=True, width=18, anchor="w").pack(
+            theme.label(row_f, f"{label_title}：", font_size=theme.FS_BODY, bold=True, width=18, anchor="w").pack(
                 side=tk.LEFT
             )
-            val_lbl = theme.label(row_f, "-", font_size=8, fg=theme.TEXT_SOFT, anchor="w")
+            val_lbl = theme.label(row_f, "-", font_size=theme.FS_BODY, fg=theme.TEXT_SOFT, anchor="w")
             val_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.lic_fields[key] = val_lbl
 
@@ -604,7 +604,7 @@ class SettingsDialog:
             sec_box,
             "💡 提示：智播豆演播室许可证绑定当前物理机主板与 CPU 签名。如需更换工作站或增购并发，请联系杭州智鑫科技管理员。",
             muted=True,
-            font_size=8,
+            font_size=theme.FS_CAPTION,
             bg=theme.BG_ELEVATED,
             wraplength=520,
             justify=tk.LEFT,
@@ -654,16 +654,16 @@ class SettingsDialog:
         # 头部：标签 + 当前数值胶囊 + 状态说明
         row_d_info = tk.Frame(b1, bg=theme.SURFACE)
         row_d_info.pack(fill=tk.X, pady=(4, 4))
-        theme.label(row_d_info, "弹幕播报闪避压低比例:", font_size=8, bold=True).pack(side=tk.LEFT)
+        theme.label(row_d_info, "弹幕播报闪避压低比例:", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
 
         self.lab_duck_val = theme.pill(
             row_d_info, f"{self.var_duck_pct.get()}%",
-            bg=theme.PRIMARY_MUTED, fg=theme.CYAN, font_size=9, bold=True, padx=8, pady=2
+            bg=theme.PRIMARY_MUTED, fg=theme.CYAN, font_size=theme.FS_BODY, bold=True, padx=8, pady=2
         )
         self.lab_duck_val.pack(side=tk.LEFT, padx=8)
 
         self.lab_duck_desc = theme.label(
-            row_d_info, "", font_size=8, fg=theme.TEXT_MUTED
+            row_d_info, "", font_size=theme.FS_CAPTION, fg=theme.TEXT_MUTED
         )
         self.lab_duck_desc.pack(side=tk.LEFT)
 
@@ -671,7 +671,7 @@ class SettingsDialog:
         row_slider = tk.Frame(b1, bg=theme.SURFACE)
         row_slider.pack(fill=tk.X, pady=(4, 6))
 
-        theme.label(row_slider, "5% (深压)", muted=True, font_size=8).pack(side=tk.LEFT, padx=(2, 6))
+        theme.label(row_slider, "5% (深压)", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT, padx=(2, 6))
 
         self.slider_duck = ttk.Scale(
             row_slider,
@@ -684,18 +684,18 @@ class SettingsDialog:
         )
         self.slider_duck.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
-        theme.label(row_slider, "90% (微调)", muted=True, font_size=8).pack(side=tk.LEFT, padx=(6, 2))
+        theme.label(row_slider, "90% (微调)", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT, padx=(6, 2))
 
         # 快捷档位预设按钮
         row_presets = tk.Frame(b1, bg=theme.SURFACE)
         row_presets.pack(fill=tk.X, pady=(2, 6))
-        theme.label(row_presets, "快捷档位：", muted=True, font_size=8).pack(side=tk.LEFT, padx=(2, 6))
+        theme.label(row_presets, "快捷档位：", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT, padx=(2, 6))
 
         for p_val, p_text in [(15, "15% 强力压低"), (25, "25% 官方推荐"), (35, "35% 柔和闪避"), (50, "50% 对半平衡")]:
             btn_p = theme.button(
                 row_presets, p_text,
                 color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
-                font_size=7, padx=6, pady=1,
+                font_size=theme.FS_CAPTION, padx=7, pady=2,
                 command=lambda v=p_val: self._set_duck_preset(v)
             )
             btn_p.pack(side=tk.LEFT, padx=3)
@@ -707,7 +707,7 @@ class SettingsDialog:
             "机制：当弹幕触发 TTS 发音时，系统通过 WASAPI 毫秒级自动压低 scrcpy.exe 音量；\n"
             "TTS 播报完毕后无缝平滑回弹至 100%，两者声音和谐共存，无需暂停话术。",
             muted=True,
-            font_size=8,
+            font_size=theme.FS_CAPTION,
             anchor="w",
             justify=tk.LEFT,
         ).pack(fill=tk.X, pady=(4, 0))
@@ -718,7 +718,7 @@ class SettingsDialog:
 
         row_o = tk.Frame(b2, bg=theme.SURFACE)
         row_o.pack(fill=tk.X, pady=4)
-        theme.label(row_o, "推流服务端口 (Port):", font_size=8, bold=True).pack(side=tk.LEFT)
+        theme.label(row_o, "推流服务端口 (Port):", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
         self.ent_obs_port = theme.entry(row_o, width=12)
         self.ent_obs_port.insert(0, self.var_obs_port.get())
         self.ent_obs_port.pack(side=tk.LEFT, padx=8)
@@ -735,7 +735,7 @@ class SettingsDialog:
 
         btn_copy = theme.button(
             row_o, "📋 复制推流源地址", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
-            font_size=8, padx=8, pady=2, command=_copy_obs,
+            font_size=theme.FS_CAPTION, padx=8, pady=2, command=_copy_obs,
         )
         btn_copy.pack(side=tk.LEFT, padx=6)
 
@@ -745,29 +745,29 @@ class SettingsDialog:
 
         row_v1 = tk.Frame(b3, bg=theme.SURFACE)
         row_v1.pack(fill=tk.X, pady=3)
-        theme.label(row_v1, "连续静音切句判定 (秒):", font_size=8, bold=True, width=22, anchor="w").pack(side=tk.LEFT)
+        theme.label(row_v1, "连续静音切句判定 (秒):", font_size=theme.FS_BODY, bold=True, width=22, anchor="w").pack(side=tk.LEFT)
         self.ent_vad_silence = theme.entry(row_v1, width=12)
         self.ent_vad_silence.insert(0, self.var_vad_silence.get())
         self.ent_vad_silence.pack(side=tk.LEFT, padx=8)
-        theme.label(row_v1, "豆包连续静音超过此时长判定说完了，自动切入下一轮 (默认 4.0s)", muted=True, font_size=8).pack(
+        theme.label(row_v1, "豆包连续静音超过此时长判定说完了，自动切入下一轮 (默认 4.0s)", muted=True, font_size=theme.FS_CAPTION).pack(
             side=tk.LEFT
         )
 
         row_v2 = tk.Frame(b3, bg=theme.SURFACE)
         row_v2.pack(fill=tk.X, pady=3)
-        theme.label(row_v2, "发言确认消抖时长 (秒):", font_size=8, bold=True, width=22, anchor="w").pack(side=tk.LEFT)
+        theme.label(row_v2, "发言确认消抖时长 (秒):", font_size=theme.FS_BODY, bold=True, width=22, anchor="w").pack(side=tk.LEFT)
         self.ent_vad_confirm = theme.entry(row_v2, width=12)
         self.ent_vad_confirm.insert(0, self.var_vad_confirm.get())
         self.ent_vad_confirm.pack(side=tk.LEFT, padx=8)
-        theme.label(row_v2, "连续语音确认时长，防止杂音偶发误触 (默认 0.3s)", muted=True, font_size=8).pack(side=tk.LEFT)
+        theme.label(row_v2, "连续语音确认时长，防止杂音偶发误触 (默认 0.3s)", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT)
 
         row_v3 = tk.Frame(b3, bg=theme.SURFACE)
         row_v3.pack(fill=tk.X, pady=3)
-        theme.label(row_v3, "发消息后思考等待上限 (秒):", font_size=8, bold=True, width=22, anchor="w").pack(side=tk.LEFT)
+        theme.label(row_v3, "发消息后思考等待上限 (秒):", font_size=theme.FS_BODY, bold=True, width=22, anchor="w").pack(side=tk.LEFT)
         self.ent_vad_wait = theme.entry(row_v3, width=12)
         self.ent_vad_wait.insert(0, self.var_vad_wait.get())
         self.ent_vad_wait.pack(side=tk.LEFT, padx=8)
-        theme.label(row_v3, "防思考期无语音被误判为播报结束 (默认 15.0s)", muted=True, font_size=8).pack(side=tk.LEFT)
+        theme.label(row_v3, "防思考期无语音被误判为播报结束 (默认 15.0s)", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT)
 
     def _set_duck_preset(self, val: int):
         """设置滑动条快捷预设档位。"""
@@ -810,25 +810,25 @@ class SettingsDialog:
         row_v = tk.Frame(b1, bg=theme.SURFACE)
         row_v.pack(fill=tk.X, pady=6)
 
-        theme.label(row_v, "当前运行版本：", font_size=9, bold=True).pack(side=tk.LEFT)
-        theme.pill(row_v, f"v{APP_VERSION} Official", bg=theme.PRIMARY_MUTED, fg=theme.CYAN, font_size=9, bold=True).pack(
+        theme.label(row_v, "当前运行版本：", font_size=theme.FS_BODY, bold=True).pack(side=tk.LEFT)
+        theme.pill(row_v, f"v{APP_VERSION} Official", bg=theme.PRIMARY_MUTED, fg=theme.CYAN, font_size=theme.FS_BODY, bold=True).pack(
             side=tk.LEFT, padx=(4, 12)
         )
 
         self.btn_check_ver = theme.button(
             row_v, "🔍 检查新版本", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
-            font_size=8, padx=8, pady=3, command=self._check_version_update,
+            font_size=theme.FS_CAPTION, padx=8, pady=3, command=self._check_version_update,
         )
         self.btn_check_ver.pack(side=tk.LEFT)
 
-        self.lab_ver_status = theme.label(row_v, "", font_size=8, fg=theme.GREEN)
+        self.lab_ver_status = theme.label(row_v, "", font_size=theme.FS_BODY, fg=theme.GREEN)
         self.lab_ver_status.pack(side=tk.LEFT, padx=10)
 
         theme.label(
             b1,
             "核心架构：Python 3.11 · Scrcpy 2.4 · WASAPI Ducking · OBS Streamer · PDK Security",
             muted=True,
-            font_size=8,
+            font_size=theme.FS_CAPTION,
             anchor="w",
         ).pack(fill=tk.X, pady=(4, 0))
 
@@ -863,12 +863,12 @@ class SettingsDialog:
         for ver_title, items in changelogs:
             item_box = tk.Frame(b2, bg=theme.SURFACE)
             item_box.pack(fill=tk.X, pady=4)
-            theme.label(item_box, ver_title, font_size=8, bold=True, fg=theme.CYAN).pack(anchor="w")
+            theme.label(item_box, ver_title, font_size=theme.FS_BODY, bold=True, fg=theme.CYAN).pack(anchor="w")
             for item in items:
                 row_log = tk.Frame(item_box, bg=theme.SURFACE)
                 row_log.pack(fill=tk.X, padx=12, pady=1)
-                theme.label(row_log, "•", muted=True, font_size=8).pack(side=tk.LEFT)
-                theme.label(row_log, item, muted=True, font_size=8).pack(side=tk.LEFT, padx=4)
+                theme.label(row_log, "•", muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT)
+                theme.label(row_log, item, muted=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT, padx=4)
 
     def _check_version_update(self):
         """模拟异步检测版本更新。"""

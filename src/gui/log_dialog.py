@@ -46,25 +46,25 @@ class LogDialog:
         top_bar.pack(fill=tk.X, padx=12, pady=(12, 6))
         top_bar.pack_propagate(False)
 
-        theme.label(top_bar, "📜 实时运行日志", bold=True, font_size=10, fg=theme.CYAN).pack(side=tk.LEFT, padx=(12, 8), pady=8)
-        self.lab_count = theme.label(top_bar, "共 0 行", muted=True, font_size=8)
+        theme.label(top_bar, "📜 实时运行日志", bold=True, font_size=theme.FS_CARD_TITLE, fg=theme.CYAN).pack(side=tk.LEFT, padx=(12, 8), pady=8)
+        self.lab_count = theme.label(top_bar, "共 0 行", muted=True, font_size=theme.FS_BODY)
         self.lab_count.pack(side=tk.LEFT, pady=8)
 
         # 右侧操作按钮
-        btn_close = theme.button(top_bar, "✕ 关闭", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER, width=7, font_size=8, command=self.close)
+        btn_close = theme.button(top_bar, "✕ 关闭", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER, width=7, font_size=theme.FS_BODY, command=self.close)
         btn_close.pack(side=tk.RIGHT, padx=(4, 10), pady=6)
 
-        btn_copy = theme.button(top_bar, "📋 复制全部", color=theme.PRIMARY, active=theme.PRIMARY_HOVER, width=9, font_size=8, command=self._copy_all)
+        btn_copy = theme.button(top_bar, "📋 复制全部", color=theme.PRIMARY, active=theme.PRIMARY_HOVER, width=9, font_size=theme.FS_BODY, command=self._copy_all)
         btn_copy.pack(side=tk.RIGHT, padx=4, pady=6)
 
-        btn_clear = theme.button(top_bar, "🧹 清空日志", color=theme.RED_DARK, active=theme.RED, width=8, font_size=8, command=self._clear_logs)
+        btn_clear = theme.button(top_bar, "🧹 清空日志", color=theme.RED_DARK, active=theme.RED, width=8, font_size=theme.FS_BODY, command=self._clear_logs)
         btn_clear.pack(side=tk.RIGHT, padx=4, pady=6)
 
         chk_scroll = tk.Checkbutton(
             top_bar, text="自动滚动", variable=self._auto_scroll_var,
             bg=theme.SURFACE, fg=theme.TEXT_SOFT, selectcolor=theme.SURFACE_ALT,
             activebackground=theme.SURFACE, activeforeground=theme.TEXT,
-            font=("Segoe UI", 8),
+            font=theme.font(theme.FS_BODY),
         )
         chk_scroll.pack(side=tk.RIGHT, padx=8, pady=6)
 
@@ -79,7 +79,7 @@ class LogDialog:
             fg="#E6EDF3",
             insertbackground="#58A6FF",
             selectbackground="#1F6FEB",
-            font=("Consolas", 9),
+            font=theme.font_code(theme.FS_BODY),
             bd=0,
             highlightthickness=1,
             highlightbackground=theme.BORDER,

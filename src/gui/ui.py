@@ -412,13 +412,13 @@ def build_ui():
         header.delete("header-fg")
         header.create_oval(20, 11, 48, 39, outline=theme.CYAN, width=2, tags="header-fg")
         header.create_text(34, 25, text="ZD", fill=theme.TEXT,
-                           font=(theme.FONT_EN, 10, "bold"), tags="header-fg")
+                           font=theme.font_en(10, "bold"), tags="header-fg")
         header.create_text(62, 19, text="智播豆  ·  AI 智能直播工作台",
-                           fill=theme.TEXT, anchor="w", font=theme.font(13, "bold"), tags="header-fg")
+                           fill=theme.TEXT, anchor="w", font=theme.font(theme.FS_DISPLAY, "bold"), tags="header-fg")
         header.create_text(63, 36, text="ZHIBODOU LIVE OPERATIONS CONSOLE",
-                           fill=theme.TEXT_MUTED, anchor="w", font=(theme.FONT_EN, 7), tags="header-fg")
+                           fill=theme.TEXT_MUTED, anchor="w", font=theme.font_en(theme.FS_CAPTION), tags="header-fg")
         header.create_text(w - 20, 25, text="DESKTOP  v1.7.0",
-                           fill=theme.TEXT_MUTED, anchor="e", font=(theme.FONT_EN, 8, "bold"), tags="header-fg")
+                           fill=theme.TEXT_MUTED, anchor="e", font=theme.font_en(theme.FS_CAPTION, "bold"), tags="header-fg")
 
     header.bind("<Configure>", _paint_header)
 
@@ -442,28 +442,28 @@ def build_ui():
     status_dot.create_oval(3, 3, 13, 13, fill=theme.GREEN if auth_ok else theme.RED, outline="")
     lab_auth_status = theme.label(
         auth_frame, "PDK 授权已验证" if auth_ok else "PDK 未授权",
-        fg=theme.GREEN if auth_ok else theme.RED, bold=True, font_size=9,
+        fg=theme.GREEN if auth_ok else theme.RED, bold=True, font_size=theme.FS_BODY,
     )
     lab_auth_status.pack(side=tk.LEFT)
     tk.Frame(auth_frame, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=10)
     lab_auth_detail = theme.label(
         auth_frame, auth_result.display_detail() if auth_ok else "请重新登录",
-        muted=True, font_size=9, anchor="w",
+        muted=True, font_size=theme.FS_BODY, anchor="w",
     )
     lab_auth_detail.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     btn_logout = theme.button(auth_frame, "退出", color=theme.SLATE_BTN,
-                              active=theme.SLATE_BTN_HOVER, width=7, font_size=8)
-    btn_logout.pack(side=tk.RIGHT, padx=(4, 12), pady=7)
+                              active=theme.SLATE_BTN_HOVER, width=6, font_size=theme.FS_BODY)
+    btn_logout.pack(side=tk.RIGHT, padx=(4, 12), pady=6)
     btn_power = theme.button(auth_frame, "电源", color=theme.RED_DARK,
-                             active=theme.RED, width=7, font_size=8)
-    btn_power.pack(side=tk.RIGHT, padx=3, pady=7)
+                             active=theme.RED, width=6, font_size=theme.FS_BODY)
+    btn_power.pack(side=tk.RIGHT, padx=3, pady=6)
     btn_auth = theme.button(auth_frame, "许可证", color=theme.SLATE_BTN,
-                            active=theme.SLATE_BTN_HOVER, width=7, font_size=8)
-    btn_auth.pack(side=tk.RIGHT, padx=3, pady=7)
+                            active=theme.SLATE_BTN_HOVER, width=7, font_size=theme.FS_BODY)
+    btn_auth.pack(side=tk.RIGHT, padx=3, pady=6)
     btn_pwd = theme.button(auth_frame, "账户资料", color=theme.SLATE_BTN,
-                           active=theme.SLATE_BTN_HOVER, width=8, font_size=8)
-    btn_pwd.pack(side=tk.RIGHT, padx=3, pady=7)
+                           active=theme.SLATE_BTN_HOVER, width=8, font_size=theme.FS_BODY)
+    btn_pwd.pack(side=tk.RIGHT, padx=3, pady=6)
 
     def _open_settings():
         try:
@@ -474,9 +474,9 @@ def build_ui():
             mb.showerror("错误", f"打开设置中心失败: {e}")
 
     btn_settings = theme.button(auth_frame, "设置", color=theme.SLATE_BTN,
-                                active=theme.SLATE_BTN_HOVER, width=7, font_size=8,
+                                active=theme.SLATE_BTN_HOVER, width=6, font_size=theme.FS_BODY,
                                 command=_open_settings)
-    btn_settings.pack(side=tk.RIGHT, padx=3, pady=7)
+    btn_settings.pack(side=tk.RIGHT, padx=3, pady=6)
 
     def _open_logs():
         try:
@@ -487,18 +487,18 @@ def build_ui():
             mb.showerror("错误", f"打开运行日志失败: {e}")
 
     btn_logs = theme.button(auth_frame, "📜 运行日志", color=theme.SLATE_BTN,
-                            active=theme.SLATE_BTN_HOVER, width=9, font_size=8,
+                            active=theme.SLATE_BTN_HOVER, width=9, font_size=theme.FS_BODY,
                             command=_open_logs)
-    btn_logs.pack(side=tk.RIGHT, padx=3, pady=7)
+    btn_logs.pack(side=tk.RIGHT, padx=3, pady=6)
 
     # 预留底栏空间
     footer = tk.Frame(root, bg=theme.BG_ELEVATED, height=22)
     footer.pack(side=tk.BOTTOM, fill=tk.X)
     footer.pack_propagate(False)
     theme.label(footer, "杭州智鑫科技  ·  智播豆 AI 直播管控系统",
-                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.LEFT, padx=16, pady=2)
+                muted=True, font_size=theme.FS_CAPTION, bg=theme.BG_ELEVATED).pack(side=tk.LEFT, padx=16, pady=2)
     theme.label(footer, "LOCAL DESKTOP · SECURE SESSION",
-                muted=True, font_size=8, bg=theme.BG_ELEVATED).pack(side=tk.RIGHT, padx=16, pady=2)
+                muted=True, font_size=theme.FS_CAPTION, bg=theme.BG_ELEVATED).pack(side=tk.RIGHT, padx=16, pady=2)
 
     # ---------------- 底部平铺直播状态栏 (平铺全屏最底端) ----------------
     statusbar = tk.Frame(root, bg=theme.SURFACE, height=36)
@@ -507,31 +507,31 @@ def build_ui():
 
     # 左侧：系统运行与弹幕状态
     lab_sys_status = theme.label(statusbar, "🟢 待机 · 等待启动", fg=theme.GREEN,
-                                 bold=True, font_size=9, anchor="w")
+                                 bold=True, font_size=theme.FS_BODY, anchor="w")
     lab_sys_status.pack(side=tk.LEFT, padx=(14, 8))
 
     tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=8)
 
     lab_danmu_status = theme.label(statusbar, "💬 弹幕采集 · 未启动", muted=True,
-                                   font_size=8, anchor="w")
+                                   font_size=theme.FS_BODY, anchor="w")
     lab_danmu_status.pack(side=tk.LEFT, padx=6)
 
     tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=8)
 
-    lab_online = theme.label(statusbar, "📶 在线：0 人", fg=theme.CYAN, bold=True, font_size=8)
+    lab_online = theme.label(statusbar, "📶 在线：0 人", fg=theme.CYAN, bold=True, font_size=theme.FS_BODY)
     lab_online.pack(side=tk.LEFT, padx=6)
 
-    lab_like = theme.label(statusbar, "👍 点赞：0", fg=theme.PURPLE, bold=True, font_size=8)
+    lab_like = theme.label(statusbar, "👍 点赞：0", fg=theme.PURPLE, bold=True, font_size=theme.FS_BODY)
     lab_like.pack(side=tk.LEFT, padx=6)
 
-    lab_gift = theme.label(statusbar, "🎁 礼物：0", fg=theme.AMBER, bold=True, font_size=8)
+    lab_gift = theme.label(statusbar, "🎁 礼物：0", fg=theme.AMBER, bold=True, font_size=theme.FS_BODY)
     lab_gift.pack(side=tk.LEFT, padx=6)
 
     tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=8)
 
     # 链路标签
     def _status_pill(name, color):
-        pill = theme.pill(statusbar, name, bg=theme.SURFACE_ALT, fg=color, font_size=7, bold=True)
+        pill = theme.pill(statusbar, name, bg=theme.SURFACE_ALT, fg=color, font_size=theme.FS_CAPTION, bold=True)
         pill.pack(side=tk.LEFT, padx=3)
         return pill
 
@@ -542,14 +542,14 @@ def build_ui():
 
     # 右侧：OBS 音频链接复制与运行日志快捷按钮
     btn_bar_logs = theme.button(statusbar, "📜 运行日志", color=theme.SLATE_BTN,
-                                active=theme.SLATE_BTN_HOVER, font_size=8, padx=6, pady=1,
+                                active=theme.SLATE_BTN_HOVER, font_size=theme.FS_CAPTION, padx=7, pady=2,
                                 command=_open_logs)
     btn_bar_logs.pack(side=tk.RIGHT, padx=(4, 12), pady=6)
 
     tk.Frame(statusbar, bg=theme.BORDER, width=1).pack(side=tk.RIGHT, fill=tk.Y, padx=6, pady=8)
 
     obs_audio_port_init = config.load_config().get("obs_audio_port", 8554)
-    lbl_obs_link = theme.label(statusbar, f"OBS音频源: :{obs_audio_port_init}", muted=True, font_size=8)
+    lbl_obs_link = theme.label(statusbar, f"OBS音频源: :{obs_audio_port_init}", muted=True, font_size=theme.FS_BODY)
     lbl_obs_link.pack(side=tk.RIGHT, padx=4)
 
     def _copy_obs_link():
@@ -564,7 +564,7 @@ def build_ui():
             pass
 
     btn_copy_obs = theme.button(statusbar, "复制音频源", color=theme.SURFACE_SOFT,
-                                active=theme.BORDER_FOCUS, font_size=7, padx=5, pady=1,
+                                active=theme.BORDER_FOCUS, font_size=theme.FS_CAPTION, padx=7, pady=2,
                                 command=_copy_obs_link)
     btn_copy_obs.pack(side=tk.RIGHT, padx=4)
 
@@ -579,7 +579,7 @@ def build_ui():
     device_card, device_body = theme.card(ui_left, "设备画面 · 音频链路", accent=theme.PRIMARY)
     device_card.pack(fill=tk.BOTH, expand=True)
     theme.label(device_body, "SCRCPY DEVICE CHANNEL", muted=True,
-                font_size=8, anchor="w").pack(fill=tk.X, pady=(0, 5))
+                font_size=theme.FS_CAPTION, anchor="w").pack(fill=tk.X, pady=(0, 5))
     embed_container = tk.Frame(
         device_body, bg="#02070D", bd=0,
         highlightthickness=1, highlightbackground=theme.BORDER,
@@ -590,7 +590,7 @@ def build_ui():
     audio_hint_box.pack(fill=tk.X, pady=(5, 0))
     theme.label(
         audio_hint_box, "音频由 CABLE 路由至 VAD/OBS",
-        muted=True, font_size=8, anchor="center",
+        muted=True, font_size=theme.FS_CAPTION, anchor="center",
     ).pack(side=tk.LEFT, expand=True, padx=(2, 2))
 
     def _open_audio_mix():
@@ -602,17 +602,17 @@ def build_ui():
 
     btn_audio_pref = theme.button(
         audio_hint_box, "⚙️ 音频分流", color=theme.SLATE_BTN,
-        active=theme.SLATE_BTN_HOVER, font_size=8, padx=6, pady=2, command=_open_audio_mix,
+        active=theme.SLATE_BTN_HOVER, font_size=theme.FS_CAPTION, padx=6, pady=2, command=_open_audio_mix,
     )
     btn_audio_pref.pack(side=tk.RIGHT, padx=(2, 2))
 
     # 抓屏控制条（移至左侧设备卡片，与画面紧密联动）
     cap_bar = tk.Frame(device_body, bg=theme.SURFACE, padx=6, pady=4)
     cap_bar.pack(fill=tk.X, pady=(4, 0))
-    lab_cap_status = theme.label(cap_bar, "抓屏 · 已停止", fg=theme.AMBER, font_size=8, bg=theme.SURFACE)
+    lab_cap_status = theme.label(cap_bar, "抓屏 · 已停止", fg=theme.AMBER, font_size=theme.FS_BODY, bg=theme.SURFACE)
     lab_cap_status.pack(side=tk.LEFT)
     btn_cap = theme.button(cap_bar, "开启抓屏", color=theme.SLATE_BTN,
-                           active=theme.SLATE_BTN_HOVER, width=8, state=tk.DISABLED, font_size=8, pady=1)
+                           active=theme.SLATE_BTN_HOVER, width=8, state=tk.DISABLED, font_size=theme.FS_BODY, pady=2)
     btn_cap.pack(side=tk.RIGHT)
 
     # ---------------- 右侧主控制台 (ui_right) ----------------
@@ -638,7 +638,7 @@ def build_ui():
     ent_prod_desc.grid(row=0, column=3, padx=(0, 10), pady=3, sticky="ew", ipady=2)
 
     btn_save = theme.button(cfg, "💾 保存配置", color=theme.PRIMARY,
-                            active=theme.PRIMARY_HOVER, width=9, font_size=9)
+                            active=theme.PRIMARY_HOVER, width=9, font_size=theme.FS_BODY)
     btn_save.grid(row=0, column=4, pady=3, sticky="e")
 
     # 第 2 行：直播间地址与手动启动弹幕按钮
@@ -647,7 +647,7 @@ def build_ui():
     ent_danmu_url.grid(row=1, column=1, columnspan=3, padx=(0, 10), pady=3, sticky="ew", ipady=2)
 
     btn_danmu = theme.button(cfg, "🚀 启动弹幕", color=theme.TEAL,
-                             active=theme.CYAN, width=9, font_size=9)
+                             active=theme.CYAN, width=9, font_size=theme.FS_BODY)
     btn_danmu.grid(row=1, column=4, pady=3, sticky="e")
 
     # 2. 策略与预演并排区
@@ -663,7 +663,7 @@ def build_ui():
     txt_pre_meet.pack(fill=tk.BOTH, expand=True)
 
     btn_meet = theme.button(meet, "▶ 执行预演", color=theme.SLATE_BTN,
-                            active=theme.SLATE_BTN_HOVER, width=9, state=tk.DISABLED, font_size=8)
+                            active=theme.SLATE_BTN_HOVER, width=9, state=tk.DISABLED, font_size=theme.FS_BODY)
     btn_meet.pack(anchor="e", pady=(5, 0))
 
     script_card, scripts = theme.card(strategy_row, "区间话术策略", accent=theme.PRIMARY, pady=6)
@@ -689,7 +689,7 @@ def build_ui():
     # 在 script_card 右上角标题栏嵌入“全部关闭”按钮，彻底释放行内空间
     btn_close_notepads = theme.button(
         script_card.header, "✕ 全部关闭",
-        color=theme.SURFACE_SOFT, active=theme.BORDER, font_size=8,
+        color=theme.SURFACE_SOFT, active=theme.BORDER, font_size=theme.FS_CAPTION,
         padx=6, pady=1, command=_close_notepads_handler,
     )
     btn_close_notepads.pack(side=tk.RIGHT, pady=2)
@@ -710,26 +710,27 @@ def build_ui():
         _section_label(scripts, title, row, 0, padx=(0, 4), pady=3, sticky="w")
         start_entry = theme.entry(scripts, width=4)
         start_entry.grid(row=row, column=1, pady=3, sticky="w", ipady=2)
-        theme.label(scripts, "—", muted=True, font_size=9).grid(row=row, column=2, padx=2)
+        theme.label(scripts, "—", muted=True, font_size=theme.FS_BODY).grid(row=row, column=2, padx=2)
         end_entry = theme.entry(scripts, width=5)
         end_entry.grid(row=row, column=3, pady=3, sticky="w", ipady=2)
-        theme.label(scripts, "人", muted=True, font_size=8).grid(row=row, column=4, padx=(2, 6))
+        theme.label(scripts, "人", muted=True, font_size=theme.FS_BODY).grid(row=row, column=4, padx=(2, 6))
 
         file_pill = theme.pill(
             scripts, f"{key}.txt", bg=theme.SURFACE_SOFT,
-            fg=theme.CYAN, font_size=8, bold=True, padx=5, pady=2,
+            fg=theme.CYAN, font_size=theme.FS_CAPTION, bold=True, padx=6, pady=2,
         )
         file_pill.grid(row=row, column=5, padx=(0, 4), sticky="w")
 
-        lab_info = theme.label(scripts, "(加载中)", muted=True, font_size=8, width=6, anchor="w")
+        lab_info = theme.label(scripts, "(加载中)", muted=True, font_size=theme.FS_CAPTION, width=6, anchor="w")
         lab_info.grid(row=row, column=6, padx=(0, 4), sticky="w")
 
-        lab_prev = theme.label(scripts, "...", muted=True, font_size=8, anchor="w", width=1)
+        lab_prev = theme.label(scripts, "...", muted=True, font_size=theme.FS_CAPTION, anchor="w", width=1)
         lab_prev.grid(row=row, column=7, padx=(4, 8), sticky="ew")
 
         btn_open = theme.button(
             scripts, "📄 打开编辑",
-            color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER, width=9, font_size=8,
+            color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER, width=9, font_size=theme.FS_CAPTION,
+            padx=6, pady=2,
             command=lambda k=key: _open_script_handler(k),
         )
         btn_open.grid(row=row, column=8, pady=3, sticky="e")
@@ -751,7 +752,7 @@ def build_ui():
     top_ctrl = tk.Frame(controls, bg=theme.SURFACE)
     top_ctrl.pack(fill=tk.X, pady=(0, 4))
 
-    theme.label(top_ctrl, "语言", muted=True, font_size=9).pack(side=tk.LEFT, padx=(0, 4))
+    theme.label(top_ctrl, "语言", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 4))
     cmb_doubao_lang = ttk.Combobox(
         top_ctrl, style="Zhibodou.TCombobox",
         values=config.DOUBAO_LANGUAGES, width=7, state="readonly",
@@ -759,28 +760,28 @@ def build_ui():
     cmb_doubao_lang.pack(side=tk.LEFT, padx=(0, 12))
 
     btn_live_start = theme.button(top_ctrl, "▶ 启动直播", color=theme.GREEN_DARK,
-                                  active=theme.GREEN, width=9, state=tk.DISABLED, font_size=9)
+                                  active=theme.GREEN, width=9, state=tk.DISABLED, font_size=theme.FS_BODY)
     btn_live_start.pack(side=tk.LEFT, padx=(0, 6))
 
     btn_live_stop = theme.button(top_ctrl, "⏹ 停止直播", color=theme.RED_DARK,
-                                 active=theme.RED, width=9, state=tk.DISABLED, font_size=9)
+                                 active=theme.RED, width=9, state=tk.DISABLED, font_size=theme.FS_BODY)
     btn_live_stop.pack(side=tk.LEFT, padx=(0, 10))
 
     lab_count = theme.label(top_ctrl, "下一轮 · 已就绪", fg=theme.CYAN,
-                            bold=True, font_size=9, anchor="e")
+                            bold=True, font_size=theme.FS_BODY, anchor="e")
     lab_count.pack(side=tk.RIGHT, padx=(4, 0))
 
     # VAD 音量电平表与快速监控
     meter_row = tk.Frame(controls, bg=theme.SURFACE)
     meter_row.pack(fill=tk.X, pady=(2, 0))
 
-    theme.label(meter_row, "VAD 监听", muted=True, bold=True, font_size=8).pack(side=tk.LEFT, padx=(0, 6))
+    theme.label(meter_row, "VAD 监听", muted=True, bold=True, font_size=theme.FS_CAPTION).pack(side=tk.LEFT, padx=(0, 6))
     volume_canvas = tk.Canvas(meter_row, width=280, height=14, bg=theme.SURFACE_ALT,
                               bd=0, highlightthickness=0)
     volume_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     lab_vad_state = theme.label(meter_row, "待机 · 等待音频", muted=True,
-                                font_size=8, width=20, anchor="w")
+                                font_size=theme.FS_BODY, width=20, anchor="w")
     lab_vad_state.pack(side=tk.LEFT, padx=(8, 0))
 
     root.after_idle(lambda: _draw_meter_fill(0, theme.TEXT_FAINT))
@@ -800,7 +801,7 @@ def build_ui():
     input_row = tk.Frame(stream_body, bg=theme.SURFACE)
     input_row.pack(fill=tk.X, pady=(0, 5))
 
-    theme.label(input_row, "直播流地址", muted=True, font_size=9).pack(side=tk.LEFT, padx=(0, 6))
+    theme.label(input_row, "直播流地址", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 6))
     ent_stream_input = theme.entry(input_row)
     ent_stream_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
 
@@ -814,13 +815,13 @@ def build_ui():
 
     btn_link_danmu = theme.button(
         input_row, "🔗 同直播间", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
-        font_size=8, padx=6, pady=2, command=_sync_from_danmu_url,
+        font_size=theme.FS_CAPTION, padx=6, pady=2, command=_sync_from_danmu_url,
     )
     btn_link_danmu.pack(side=tk.LEFT, padx=(0, 6))
 
     btn_parse_stream = theme.button(
         input_row, "🔍 解析流地址", color=theme.PRIMARY, active=theme.PRIMARY_HOVER,
-        width=11, font_size=9,
+        width=11, font_size=theme.FS_BODY,
     )
     btn_parse_stream.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -832,7 +833,7 @@ def build_ui():
 
     btn_clear_stream = theme.button(
         input_row, "🧹 清空", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
-        width=6, font_size=8, command=_clear_stream_fields,
+        width=6, font_size=theme.FS_CAPTION, padx=6, pady=2, command=_clear_stream_fields,
     )
     btn_clear_stream.pack(side=tk.LEFT)
 
@@ -841,7 +842,7 @@ def build_ui():
     meta_bar.pack(fill=tk.X, pady=(0, 5))
     lab_stream_meta = theme.label(
         meta_bar, "未解析 · 支持国内外 40+ 平台（抖音/快手/B站/虎牙/斗鱼/小红书/TikTok/Twitch/YouTube等）",
-        muted=True, font_size=8, bg=theme.SURFACE_ALT, anchor="w",
+        muted=True, font_size=theme.FS_CAPTION, bg=theme.SURFACE_ALT, anchor="w",
     )
     lab_stream_meta.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -849,15 +850,15 @@ def build_ui():
     out_row = tk.Frame(stream_body, bg=theme.SURFACE)
     out_row.pack(fill=tk.X, pady=(0, 5))
 
-    theme.label(out_row, "清晰度", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 4))
+    theme.label(out_row, "清晰度", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 4))
     cmb_stream_quality = ttk.Combobox(out_row, style="Zhibodou.TCombobox", width=10, state="readonly")
     cmb_stream_quality.pack(side=tk.LEFT, padx=(0, 8))
 
-    theme.label(out_row, "格式", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 4))
+    theme.label(out_row, "格式", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 4))
     cmb_stream_format = ttk.Combobox(out_row, style="Zhibodou.TCombobox", width=6, state="readonly")
     cmb_stream_format.pack(side=tk.LEFT, padx=(0, 8))
 
-    theme.label(out_row, "播放流", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 4))
+    theme.label(out_row, "播放流", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 4))
     ent_stream_url = theme.entry(out_row)
     ent_stream_url.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
 
@@ -873,7 +874,7 @@ def build_ui():
 
     btn_copy_stream = theme.button(
         out_row, "📋 复制", color=theme.SURFACE_SOFT, active=theme.BORDER_FOCUS,
-        font_size=8, padx=6, pady=2, command=_copy_parsed_stream_url,
+        font_size=theme.FS_CAPTION, padx=6, pady=2, command=_copy_parsed_stream_url,
     )
     btn_copy_stream.pack(side=tk.LEFT, padx=(0, 4))
 
@@ -890,7 +891,7 @@ def build_ui():
 
     btn_play_stream = theme.button(
         out_row, "▶ 播放", color=theme.SLATE_BTN, active=theme.SLATE_BTN_HOVER,
-        font_size=8, padx=6, pady=2, command=_play_stream_url,
+        font_size=theme.FS_CAPTION, padx=6, pady=2, command=_play_stream_url,
     )
     btn_play_stream.pack(side=tk.LEFT)
 
@@ -904,21 +905,21 @@ def build_ui():
         variable=var_auto_obs,
         bg=theme.SURFACE, fg=theme.TEXT_SOFT, selectcolor=theme.SURFACE_ALT,
         activebackground=theme.SURFACE, activeforeground=theme.TEXT,
-        font=("Segoe UI", 9),
+        font=theme.font(theme.FS_BODY),
     )
     chk_auto_obs.pack(side=tk.LEFT, padx=(0, 10))
 
     obs_ws_port_init = config.load_config().get("obs_websocket_port", 5544)
-    theme.label(obs_ctrl_row, f"OBS WS 端口: {obs_ws_port_init}", muted=True, font_size=8).pack(side=tk.LEFT, padx=(0, 10))
+    theme.label(obs_ctrl_row, f"OBS WS 端口: {obs_ws_port_init}", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 10))
 
     btn_sync_obs = theme.button(
         obs_ctrl_row, "🔄 立即同步至 OBS 场景", color=theme.TEAL, active=theme.CYAN,
-        font_size=8, padx=8, pady=2,
+        font_size=theme.FS_BODY, padx=8, pady=2,
     )
     btn_sync_obs.pack(side=tk.LEFT, padx=(0, 10))
 
     lab_obs_sync_status = theme.label(
-        obs_ctrl_row, "已就绪 · 勾选后解析自动下发", muted=True, font_size=8,
+        obs_ctrl_row, "已就绪 · 勾选后解析自动下发", muted=True, font_size=theme.FS_BODY,
     )
     lab_obs_sync_status.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
