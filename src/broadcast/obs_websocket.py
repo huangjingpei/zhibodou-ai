@@ -15,15 +15,15 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OBS_PORT = 5544
-ALT_OBS_PORTS = (5544, 4455, 4444)
+DEFAULT_OBS_PORT = 4455
+ALT_OBS_PORTS = (4455, 5544, 4444)
 
 
 def check_obs_websocket_port(host: str = "127.0.0.1", port: int = DEFAULT_OBS_PORT, timeout: float = 0.8) -> bool:
     """快速探测 OBS WebSocket 端口是否处于监听接收状态。
 
     :param host: OBS 所在主机地址，默认 127.0.0.1
-    :param port: OBS WebSocket 端口，默认 5544
+    :param port: OBS WebSocket 端口，默认 4455 (OBS Studio v28+ 原生默认)
     :param timeout: 超时时间（秒）
     :return: 端口是否可连接
     """
@@ -162,13 +162,16 @@ class ObsWebSocketClient:
     def add_or_update_stream_source(
         self,
         stream_url: str,
-        source_name: str = "智播豆网络流",
+        source_name: str = "streamget源",
         scene_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """在 OBS 当前场景中添加或更新网络流媒体源 (ffmpeg_source)。
 
+        如果该源名在 OBS 中已存在，则仅更新其推流播放地址等配置，避免重复创建或报错；
+        若不存在，则在指定场景中创建新输入源。
+
         :param stream_url: 直播流地址 (FLV / M3U8)
-        :param source_name: OBS 中的源名称，默认 "智播豆网络流"
+        :param source_name: OBS 中的源名称，默认 "streamget源"
         :param scene_name: 目标场景名称，若为 None 则自动获取当前活动场景
         :return: 结果字典 {"success": bool, "action": "created"|"updated", "message": str}
         """
@@ -188,7 +191,8 @@ class ObsWebSocketClient:
             "clear_on_media_end": False,
         }
 
-        # 1. 优先尝试更新已存在的源属性 (SetInputSettings)
+        # 1. 优先尝试直接更新已存在的源属性 (SetInputSettings)
+        # 如果源已经存在，SetInputSettings 会直接成功更新其播放地址
         update_res = self.send_request(
             "SetInputSettings",
             {
@@ -199,15 +203,36 @@ class ObsWebSocketClient:
         )
 
         if update_res.get("success"):
+            # 确认该源是否已经在当前活动场景中，若未在当前场景中则自动添加为场景项
+            try:
+                scene_items_res = self.send_request("GetSceneItemList", {"sceneName": scene_name})
+                in_scene = False
+                if scene_items_res.get("success"):
+                    for s_item in scene_items_res.get("data", {}).get("sceneItems", []):
+                        if s_item.get("sourceName") == source_name:
+                            in_scene = True
+                            break
+                if not in_scene:
+                    self.send_request(
+                        "CreateSceneItem",
+                        {
+                            "sceneName": scene_name,
+                            "sourceName": source_name,
+                            "sceneItemEnabled": True,
+                        },
+                    )
+            except Exception:
+                pass
+
             return {
                 "success": True,
                 "action": "updated",
                 "scene": scene_name,
                 "source": source_name,
-                "message": f"已成功更新 OBS 场景【{scene_name}】中的流媒体源【{source_name}】！",
+                "message": f"已成功更新 OBS 中已存在的流媒体源【{source_name}】播放地址！",
             }
 
-        # 2. 若源不存在，则在当前场景中创建新源 (CreateInput)
+        # 2. 若更新失败（说明源尚不存在），则在当前场景中创建新源 (CreateInput)
         create_res = self.send_request(
             "CreateInput",
             {
@@ -228,7 +253,27 @@ class ObsWebSocketClient:
                 "message": f"已成功在 OBS 场景【{scene_name}】中创建并添加流媒体源【{source_name}】！",
             }
         else:
-            comment = create_res.get("comment") or create_res.get("message")
+            # 容错：如果 OBS 返回源名已存在，再次尝试更新
+            code = create_res.get("code")
+            comment = str(create_res.get("comment") or create_res.get("message") or "")
+            if code == 601 or "already exists" in comment.lower() or "已存在" in comment:
+                fallback_update = self.send_request(
+                    "SetInputSettings",
+                    {
+                        "inputName": source_name,
+                        "inputSettings": input_settings,
+                        "overlay": True,
+                    },
+                )
+                if fallback_update.get("success"):
+                    return {
+                        "success": True,
+                        "action": "updated",
+                        "scene": scene_name,
+                        "source": source_name,
+                        "message": f"已成功更新 OBS 中的流媒体源【{source_name}】！",
+                    }
+
             return {
                 "success": False,
                 "message": f"在 OBS 中创建源失败: {comment}",
@@ -250,16 +295,16 @@ def push_stream_to_obs(
     host: str = "127.0.0.1",
     port: int = DEFAULT_OBS_PORT,
     password: str = "",
-    source_name: str = "智播豆网络流",
+    source_name: str = "streamget源",
 ) -> Dict[str, Any]:
     """一键将流地址推送到 OBS Studio 的高层接口。
 
     若 OBS 未开启或端口未配置，返回明确友好的引导提示。
     :param stream_url: 解析出的直播网络流地址
     :param host: OBS 地址
-    :param port: OBS WebSocket 端口，默认 5544
+    :param port: OBS WebSocket 端口，默认 4455
     :param password: 连接密码（若有）
-    :param source_name: 源名称
+    :param source_name: 源名称，默认 "streamget源"
     :return: {"success": bool, "port_open": bool, "message": str}
     """
     if not stream_url:

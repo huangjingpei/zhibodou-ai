@@ -909,7 +909,7 @@ def build_ui():
     )
     chk_auto_obs.pack(side=tk.LEFT, padx=(0, 10))
 
-    obs_ws_port_init = config.load_config().get("obs_websocket_port", 5544)
+    obs_ws_port_init = config.load_config().get("obs_websocket_port", 4455)
     theme.label(obs_ctrl_row, f"OBS WS 端口: {obs_ws_port_init}", muted=True, font_size=theme.FS_BODY).pack(side=tk.LEFT, padx=(0, 10))
 
     btn_sync_obs = theme.button(
@@ -951,10 +951,10 @@ def build_ui():
     def _do_push_to_obs_worker(stream_url):
         from broadcast.obs_websocket import check_obs_websocket_port, push_stream_to_obs
         cfg = config.load_config()
-        obs_port = int(cfg.get("obs_websocket_port", 5544))
+        obs_port = int(cfg.get("obs_websocket_port", 4455))
         obs_pwd = str(cfg.get("obs_websocket_password", ""))
 
-        # 检查 5544 端口是否开放
+        # 检查 OBS WebSocket 端口是否开放
         if not check_obs_websocket_port(port=obs_port):
             def _prompt():
                 lab_obs_sync_status.config(text=f"⚠️ 未检测到 OBS (端口 {obs_port})，请启动 OBS 并开启服务", fg=theme.AMBER)
@@ -976,7 +976,7 @@ def build_ui():
             lab_obs_sync_status.config(text=f"正在连接 OBS (端口 {obs_port}) 并下发网络流...", fg=theme.CYAN)
         root.after(0, _set_syncing)
 
-        res = push_stream_to_obs(stream_url, port=obs_port, password=obs_pwd)
+        res = push_stream_to_obs(stream_url, port=obs_port, password=obs_pwd, source_name="streamget源")
 
         def _done():
             if res.get("success"):

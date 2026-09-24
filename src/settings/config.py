@@ -127,8 +127,8 @@ DEFAULT_CFG = {
     "audio_duck_ratio": 0.25,
     # OBS MPEG-TS 音频推流端口（默认 8554）
     "obs_audio_port": 8554,
-    # OBS WebSocket 远程控制端口与流媒体源自动联动配置 (默认端口 5544)
-    "obs_websocket_port": 5544,
+    # OBS WebSocket 远程控制端口与流媒体源自动联动配置 (默认端口 4455)
+    "obs_websocket_port": 4455,
     "obs_websocket_password": "",
     "auto_sync_obs_stream": False,
     "streamget_url": "",
